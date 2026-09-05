@@ -2,7 +2,15 @@ import { access, cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { db, TaskState } from "@bugpilot/database";
-import { ManagerPlan, PatchProposal, ResearchReport, ReviewReport, TestReport } from "@bugpilot/shared";
+import {
+  AttemptRecord,
+  ManagerPlan,
+  PatchProposal,
+  ReproductionReport,
+  ResearchReport,
+  ReviewReport,
+  TestReport,
+} from "@bugpilot/shared";
 import { approvalHash, resolveInside } from "@bugpilot/policy";
 import { McpTools, parseToolJson } from "./mcp.js";
 import {
@@ -10,11 +18,18 @@ import {
   managerDecide,
   managerPlan,
   managerSynthesize,
+  reproducer,
   researcher,
   reviewer,
   tester,
 } from "./roles.js";
-import { routeAfterReview, routeAfterTest } from "./state-machine.js";
+import {
+  routeAfterReproduction,
+  routeAfterReview,
+  routeAfterScopeCheck,
+  routeAfterTest,
+} from "./state-machine.js";
+import { assessScope, changedFilesFromDiff } from "./scope.js";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
 
@@ -26,22 +41,25 @@ async function exists(value: string) {
     return false;
   }
 }
+
 async function event(taskId: string, type: string, title: string, detail?: string, iteration = 0) {
   await db.taskEvent.create({
     data: { taskId, type, title, detail, agentRole: "MANAGER", status: "COMPLETED", iteration },
   });
 }
+
 async function state(taskId: string, next: TaskState, title: string, iteration = 0) {
   await db.task.update({ where: { id: taskId }, data: { state: next, currentAgent: "MANAGER" } });
   await event(taskId, "STATE_CHANGED", title, undefined, iteration);
 }
-async function command(command: string, args: string[], cwd: string) {
+
+async function command(executable: string, args: string[], cwd: string) {
   return await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, windowsHide: true, shell: false });
-    let stdout = "",
-      stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
+    const child = spawn(executable, args, { cwd, windowsHide: true, shell: false });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
     child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
   });
@@ -52,9 +70,11 @@ async function prepare(
   repoRoot: string,
   workspaceRoot: string,
 ) {
-  if (task.workspacePath === repoRoot && task.baseCommit && (await exists(path.join(repoRoot, ".git"))))
+  if (task.workspacePath === repoRoot && task.baseCommit && (await exists(path.join(repoRoot, ".git")))) {
     return task.baseCommit;
+  }
   await rm(repoRoot, { recursive: true, force: true });
+
   if (task.demoMode) {
     const fixture = path.join(projectRoot(), "fixtures", "calculator-bug");
     await cp(fixture, repoRoot, { recursive: true });
@@ -73,17 +93,59 @@ async function prepare(
     );
     if (cloned.code !== 0) throw new Error(`Clone failed: ${cloned.stderr.slice(-2000)}`);
   }
+
   const head = await command("git", ["rev-parse", "HEAD"], repoRoot);
   if (head.code !== 0) throw new Error("Could not resolve base commit");
   return head.stdout.trim();
 }
 
+/** Rebuilds the attempt log from persisted messages, so resume keeps it. */
+async function attemptHistory(taskId: string): Promise<AttemptRecord[]> {
+  const messages = await db.agentMessage.findMany({
+    where: { taskId, type: { in: ["CODE_CHANGE_SUMMARY", "TEST_REPORT", "REVIEW_REPORT"] } },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const attempts: AttemptRecord[] = [];
+  let pending: { revision: number; summary: string; filesChanged: string[] } | undefined;
+
+  for (const record of messages) {
+    if (record.type === "CODE_CHANGE_SUMMARY") {
+      const patch = record.payload as unknown as PatchProposal;
+      pending = { revision: record.iteration, summary: patch.summary, filesChanged: patch.filesChanged };
+      continue;
+    }
+    if (!pending) continue;
+    if (record.type === "TEST_REPORT") {
+      const report = record.payload as unknown as TestReport;
+      if (report.passed) continue;
+      attempts.push({
+        ...pending,
+        outcome: "tests-failed",
+        evidence: report.failures.map((failure) => failure.message).join("; ") || report.summary,
+      });
+      pending = undefined;
+    } else {
+      const report = record.payload as unknown as ReviewReport;
+      if (report.decision === "approve") continue;
+      attempts.push({
+        ...pending,
+        outcome: "review-rejected",
+        evidence: report.findings.map((finding) => finding.title).join("; ") || report.reasoning,
+      });
+      pending = undefined;
+    }
+  }
+  return attempts;
+}
+
 export async function runTask(taskId: string) {
   const runStarted = Date.now();
   let task = await db.task.findUniqueOrThrow({ where: { id: taskId } });
-  const resumeState = task.state,
-    startingModelCalls = task.modelCalls,
-    startingAgentRuns = await db.agentRun.count({ where: { taskId } });
+  const resumeState = task.state;
+  const startingModelCalls = task.modelCalls;
+  const startingAgentRuns = await db.agentRun.count({ where: { taskId } });
+
   if (task.executionMode === "SINGLE_AGENT") {
     await state(
       taskId,
@@ -92,9 +154,11 @@ export async function runTask(taskId: string) {
     );
     return;
   }
-  const workspaceRoot = configuredWorkspaceRoot(),
-    repoRoot = resolveInside(workspaceRoot, task.id);
+
+  const workspaceRoot = configuredWorkspaceRoot();
+  const repoRoot = resolveInside(workspaceRoot, task.id);
   let mcp: McpTools | undefined;
+
   try {
     await state(taskId, "PREPARING", "Manager is preparing a resumable task workspace");
     await mkdir(workspaceRoot, { recursive: true });
@@ -103,10 +167,12 @@ export async function runTask(taskId: string) {
       where: { id: taskId },
       data: { workspacePath: repoRoot, baseCommit: base, error: null },
     });
+
     mcp = new McpTools(taskId, repoRoot);
-    await mcp.connect(["repository", "git", "runner", ...(!task.issueTitle ? ["github" as const] : [])]);
-    let title = task.issueTitle,
-      body = task.issueBody ?? "";
+    await mcp.connect(["repository", "git", "runner", ...(!task.issueTitle ? (["github"] as const) : [])]);
+
+    let title = task.issueTitle;
+    let body = task.issueBody ?? "";
     if (!title) {
       const issue = parseToolJson<{ title: string; body: string }>(
         await mcp.callTrusted("github", "read_issue", {
@@ -119,6 +185,7 @@ export async function runTask(taskId: string) {
       body = issue.body;
       await db.task.update({ where: { id: taskId }, data: { issueTitle: title, issueBody: body } });
     }
+
     const issue = {
       repository: `${task.repositoryOwner}/${task.repositoryName}`,
       number: task.issueNumber,
@@ -126,9 +193,12 @@ export async function runTask(taskId: string) {
       body,
       baseBranch: task.baseBranch,
     };
+
     task = await db.task.findUniqueOrThrow({ where: { id: taskId } });
-    let plan = task.managerPlan as unknown as ManagerPlan | null,
-      managerRunId = "";
+
+    /* ---------------------------------------------------------------- plan */
+    let plan = task.managerPlan as unknown as ManagerPlan | null;
+    let managerRunId = "";
     if (!plan) {
       await state(taskId, "PLANNING", "Manager is creating the dynamic delegation plan");
       const planned = await managerPlan(taskId, issue, mcp);
@@ -140,33 +210,51 @@ export async function runTask(taskId: string) {
       });
     } else {
       managerRunId =
-        (await db.agentRun.findFirst({ where: { taskId, role: "MANAGER" }, orderBy: { startedAt: "asc" } }))
-          ?.id ?? "";
+        (
+          await db.agentRun.findFirst({
+            where: { taskId, role: "MANAGER" },
+            orderBy: { startedAt: "asc" },
+          })
+        )?.id ?? "";
     }
-    let research = task.researchReport as unknown as ResearchReport | null,
-      reports: ResearchReport[] = [],
-      researchArtifacts: string[] = [];
+
+    /* ------------------------------------------------------------ research */
+    let research = task.researchReport as unknown as ResearchReport | null;
+    let reports: ResearchReport[] = [];
+    let researchArtifacts: string[] = [];
+
     if (!research) {
       const stored = await db.agentMessage.findMany({
-          where: { taskId, type: { startsWith: "RESEARCH_REPORT:" } },
-          orderBy: { createdAt: "asc" },
-        }),
-        completedByObjective = new Map<string, { report: ResearchReport; artifactId: string }>();
+        where: { taskId, type: { startsWith: "RESEARCH_REPORT:" } },
+        orderBy: { createdAt: "asc" },
+      });
+      const completedByObjective = new Map<string, { report: ResearchReport; artifactId: string }>();
       for (const item of stored) {
-        const report = item.payload as unknown as ResearchReport,
-          key = report.objective ?? `${report.taskType}:${item.id}`;
+        const report = item.payload as unknown as ResearchReport;
+        const key = report.objective ?? `${report.taskType}:${item.id}`;
         if (!completedByObjective.has(key)) completedByObjective.set(key, { report, artifactId: item.id });
       }
-      const completedObjectives = new Set([...completedByObjective.keys()]),
-        pending = plan.researchTasks.filter((item) => !completedObjectives.has(item.objective));
+      const completedObjectives = new Set([...completedByObjective.keys()]);
+      const pending = plan.researchTasks.filter((item) => !completedObjectives.has(item.objective));
+
       await state(taskId, "RESEARCHING", `Manager launched ${pending.length} remaining research task(s)`, 0);
+
       const outcomes = await runBoundedParallel(pending, 3, async (researchTask) => {
         try {
           return await researcher(taskId, issue, researchTask, mcp!, 0, managerRunId);
-        } catch {
+        } catch (error) {
+          // A silently dropped researcher used to leave the run proceeding on
+          // partial evidence with no record of what was missing.
+          await event(
+            taskId,
+            "RESEARCH_FAILED",
+            `Research task failed: ${researchTask.objective}`,
+            error instanceof Error ? error.message : String(error),
+          );
           return null;
         }
       });
+
       const successful = outcomes.filter((item): item is NonNullable<typeof item> => item !== null);
       reports = [...completedByObjective.values()]
         .map((item) => item.report)
@@ -174,7 +262,9 @@ export async function runTask(taskId: string) {
       researchArtifacts = [...completedByObjective.values()]
         .map((item) => item.artifactId)
         .concat(successful.map((item) => item.artifactId));
+
       if (!reports.length) throw new Error("All research agents failed before producing evidence");
+
       const synthesis = await managerSynthesize(
         taskId,
         issue,
@@ -196,17 +286,72 @@ export async function runTask(taskId: string) {
       researchArtifacts = stored.map((item) => item.id);
       if (!reports.length) reports = [research];
     }
-    let revision = task.revisionCycle,
-      testAttempts = task.attempt,
-      patch = task.patchProposal as unknown as PatchProposal | null,
-      diff = task.diff ?? "",
-      reuseExistingPatch = Boolean(
-        patch && diff && (resumeState === "TESTING" || resumeState === "REVIEWING"),
-      ),
-      reuseVerifiedTests = Boolean(
-        resumeState === "REVIEWING" && task.testReport && (task.testReport as unknown as TestReport).passed,
-      );
+
+    /* --------------------------------------------------------- reproduction */
+    let reproduction = task.reproductionReport as unknown as ReproductionReport | null;
+    if (!reproduction) {
+      await state(taskId, "REPRODUCING", "Manager delegated reproduction before any code is written");
+
+      // Verification runs through the Tester's runner authority, invoked by the
+      // Manager. The Reproducer writes the test; it cannot execute anything,
+      // so it cannot certify its own work.
+      const verify = async (testPath: string) => {
+        const selection = parseToolJson<{ status: string; project?: { projectPath: string } }>(
+          await mcp!.call("TESTER", "runner", "select_project", { changedFiles: [testPath] }, 0),
+        );
+        if (selection.status !== "selected" || !selection.project) {
+          return { failed: false, output: "No verifiable project detected", ran: false };
+        }
+        const projectPath = selection.project.projectPath;
+        await mcp!.call("TESTER", "runner", "prepare_dependencies", { projectPath }, 0);
+        const result = parseToolJson<{
+          status: string;
+          exitCode?: number;
+          stdout?: string;
+          stderr?: string;
+        }>(await mcp!.call("TESTER", "runner", "run_test", { projectPath, only: testPath }, 0));
+        if (result.status !== "ran") {
+          return { failed: false, output: "The reproduction test could not be executed", ran: false };
+        }
+        return {
+          failed: result.exitCode !== 0,
+          output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+          ran: true,
+        };
+      };
+
+      const produced = await reproducer(taskId, issue, reports, mcp, 0, researchArtifacts, verify);
+      reproduction = produced.report;
+      researchArtifacts.push(produced.artifactId);
+      await db.task.update({
+        where: { id: taskId },
+        data: { reproductionReport: reproduction as never },
+      });
+
+      const decision = routeAfterReproduction(reproduction);
+      await event(taskId, "MANAGER_DECISION", `Manager selected ${decision.next}`, decision.reason, 0);
+      if (decision.next !== "CODER") {
+        await state(taskId, "NEEDS_ATTENTION", decision.reason, 0);
+        return;
+      }
+    }
+
+    const reproductionTestPath = reproduction?.reproduced ? reproduction.testPath : undefined;
+
+    /* -------------------------------------------------- code / test / review */
+    let revision = task.revisionCycle;
+    let testAttempts = task.attempt;
+    let patch = task.patchProposal as unknown as PatchProposal | null;
+    let diff = task.diff ?? "";
+    let reuseExistingPatch = Boolean(
+      patch && diff && (resumeState === "TESTING" || resumeState === "REVIEWING"),
+    );
+    let reuseVerifiedTests = Boolean(
+      resumeState === "REVIEWING" && task.testReport && (task.testReport as unknown as TestReport).passed,
+    );
     let lastEvidence: TestReport | ReviewReport | undefined;
+    let attempts = await attemptHistory(taskId);
+
     while (revision <= task.maxRevisions && testAttempts < task.maxAttempts) {
       const usage = await db.task.findUniqueOrThrow({
         where: { id: taskId },
@@ -225,9 +370,11 @@ export async function runTask(taskId: string) {
         );
         return;
       }
+
       const resumedTests = reuseVerifiedTests;
-      let testReport: TestReport,
-        testArtifactId = "";
+      let testReport: TestReport;
+      let testArtifactId = "";
+
       if (reuseVerifiedTests) {
         testReport = task.testReport as unknown as TestReport;
         testArtifactId =
@@ -241,6 +388,7 @@ export async function runTask(taskId: string) {
         reuseExistingPatch = false;
       } else {
         let codeArtifactIds = researchArtifacts;
+
         if (reuseExistingPatch) {
           await state(
             taskId,
@@ -258,7 +406,11 @@ export async function runTask(taskId: string) {
               : "Manager delegated implementation to the Coder",
             revision,
           );
-          const coded = await coder(taskId, issue, reports, mcp, revision, researchArtifacts, lastEvidence);
+          const coded = await coder(taskId, issue, reports, mcp, revision, researchArtifacts, {
+            reproduction,
+            previous: lastEvidence,
+            attempts,
+          });
           patch = coded.report;
           const diffRaw = parseToolJson<{ stdout: string }>(
             await mcp.call("CODER", "git", "get_diff", {}, revision),
@@ -270,10 +422,69 @@ export async function runTask(taskId: string) {
             data: { patchProposal: patch as never, diff, summary: patch.summary },
           });
           codeArtifactIds = [coded.artifactId];
+
+          /* ---- deterministic scope guard, before spending a test run ---- */
+          const verdict = assessScope(changedFilesFromDiff(diff), reports, { reproductionTestPath });
+          await db.taskEvent.create({
+            data: {
+              taskId,
+              type: verdict.withinScope ? "SCOPE_OK" : "SCOPE_VIOLATION",
+              title: verdict.withinScope
+                ? "Patch stayed within the researched surface"
+                : `Patch touched ${verdict.unrelatedFiles.length} unrelated file(s)`,
+              detail: verdict.reason,
+              agentRole: "MANAGER",
+              status: verdict.withinScope ? "COMPLETED" : "DENIED",
+              iteration: revision,
+              output: verdict as never,
+            },
+          });
+
+          const scopeDecision = routeAfterScopeCheck(verdict, {
+            revisionCycle: revision,
+            maxRevisions: task.maxRevisions,
+          });
+          if (scopeDecision.next !== "TESTER") {
+            await event(
+              taskId,
+              "MANAGER_DECISION",
+              `Manager selected ${scopeDecision.next}`,
+              scopeDecision.reason,
+              revision,
+            );
+            if (scopeDecision.next === "NEEDS_ATTENTION") {
+              await state(taskId, "NEEDS_ATTENTION", scopeDecision.reason, revision);
+              return;
+            }
+            attempts = [
+              ...attempts,
+              {
+                revision,
+                summary: patch.summary,
+                filesChanged: patch.filesChanged,
+                outcome: "review-rejected",
+                evidence: scopeDecision.reason,
+              },
+            ];
+            revision++;
+            await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+            continue;
+          }
+
           await state(taskId, "TESTING", "Manager delegated empirical verification to the Tester", revision);
         }
+
         testAttempts++;
-        const tested = await tester(taskId, issue, patch!, diff, mcp, testAttempts, codeArtifactIds);
+        const tested = await tester(
+          taskId,
+          issue,
+          patch!,
+          diff,
+          mcp,
+          testAttempts,
+          codeArtifactIds,
+          reproductionTestPath,
+        );
         testReport = tested.report;
         testArtifactId = tested.artifactId;
         await db.task.update({
@@ -281,12 +492,15 @@ export async function runTask(taskId: string) {
           data: { testReport: testReport as never, attempt: testAttempts },
         });
       }
-      if (!testReport.passed) {
-        const infrastructureFailure = testReport.suggestedNextAction === "NEEDS_ATTENTION",
-          advisory = infrastructureFailure
-            ? undefined
-            : await managerDecide(taskId, { testReport, revisionCycle: revision }, mcp, revision),
-          decision = routeAfterTest(testReport, advisory, revision, task.maxRevisions);
+
+      /* ---- routing after tests ---- */
+      const testsAccepted = testReport.passed && testReport.reproductionFixed !== "failed";
+      if (!testsAccepted) {
+        const infrastructureFailure = testReport.suggestedNextAction === "NEEDS_ATTENTION";
+        const advisory = infrastructureFailure
+          ? undefined
+          : await managerDecide(taskId, { testReport, revisionCycle: revision }, mcp, revision);
+        const decision = routeAfterTest(testReport, advisory, revision, task.maxRevisions);
         await event(
           taskId,
           "MANAGER_DECISION",
@@ -294,7 +508,22 @@ export async function runTask(taskId: string) {
           decision.reason,
           revision,
         );
+
         lastEvidence = testReport;
+        if (patch) {
+          attempts = [
+            ...attempts,
+            {
+              revision,
+              summary: patch.summary,
+              filesChanged: patch.filesChanged,
+              outcome: "tests-failed",
+              evidence:
+                testReport.failures.map((failure) => failure.message).join("; ") || testReport.summary,
+            },
+          ];
+        }
+
         if (decision.next === "RESEARCHER" && revision < task.maxRevisions) {
           await state(taskId, "RE_RESEARCHING", "Manager requested targeted re-investigation", revision + 1);
           const extra = await researcher(
@@ -316,6 +545,8 @@ export async function runTask(taskId: string) {
         await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
         continue;
       }
+
+      /* ---- review ---- */
       await state(
         taskId,
         "REVIEWING",
@@ -324,23 +555,45 @@ export async function runTask(taskId: string) {
           : "Manager delegated an independent review",
         revision,
       );
-      const reviewed = await reviewer(taskId, issue, reports, diff, testReport, mcp, revision, [
-          ...researchArtifacts,
-          ...(testArtifactId ? [testArtifactId] : []),
-        ]),
-        review = reviewed.report;
+      const reviewed = await reviewer(
+        taskId,
+        issue,
+        reports,
+        diff,
+        testReport,
+        mcp,
+        revision,
+        [...researchArtifacts, ...(testArtifactId ? [testArtifactId] : [])],
+        reproduction,
+      );
+      const review = reviewed.report;
       await db.task.update({ where: { id: taskId }, data: { reviewReport: review as never } });
+
       const advisory =
-          review.decision === "reject"
-            ? await managerDecide(
-                taskId,
-                { testReport, reviewReport: review, revisionCycle: revision },
-                mcp,
-                revision,
-              )
-            : undefined,
-        decision = routeAfterReview(review, advisory, revision, task.maxRevisions);
+        review.decision === "reject"
+          ? await managerDecide(
+              taskId,
+              { testReport, reviewReport: review, revisionCycle: revision },
+              mcp,
+              revision,
+            )
+          : undefined;
+      const decision = routeAfterReview(review, advisory, revision, task.maxRevisions);
       await event(taskId, "MANAGER_DECISION", `Manager selected ${decision.next}`, decision.reason, revision);
+
+      if (decision.next !== "HUMAN_APPROVAL" && patch) {
+        attempts = [
+          ...attempts,
+          {
+            revision,
+            summary: patch.summary,
+            filesChanged: patch.filesChanged,
+            outcome: "review-rejected",
+            evidence: review.findings.map((finding) => finding.title).join("; ") || review.reasoning,
+          },
+        ];
+      }
+
       if (decision.next === "RESEARCHER") {
         await state(
           taskId,
@@ -366,6 +619,7 @@ export async function runTask(taskId: string) {
         await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
         continue;
       }
+
       if (decision.next === "CODER") {
         await state(
           taskId,
@@ -378,25 +632,29 @@ export async function runTask(taskId: string) {
         await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
         continue;
       }
+
       if (decision.next !== "HUMAN_APPROVAL") {
         await state(taskId, "NEEDS_ATTENTION", decision.reason, revision);
         return;
       }
-      const tests = await db.testRun.findMany({ where: { taskId }, orderBy: { createdAt: "asc" } }),
-        hash = approvalHash({
-          taskId,
-          repository: task.repositoryUrl,
-          targetBranch: task.baseBranch,
-          baseCommit: base,
-          diff,
-          tests: tests.map((t) => ({
-            command: t.command,
-            exitCode: t.exitCode,
-            stdout: t.stdout,
-            stderr: t.stderr,
-            durationMs: t.durationMs,
-          })),
-        });
+
+      /* ---- human gate ---- */
+      const tests = await db.testRun.findMany({ where: { taskId }, orderBy: { createdAt: "asc" } });
+      const hash = approvalHash({
+        taskId,
+        repository: task.repositoryUrl,
+        targetBranch: task.baseBranch,
+        baseCommit: base,
+        diff,
+        tests: tests.map((run) => ({
+          command: run.command,
+          exitCode: run.exitCode,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          durationMs: run.durationMs,
+        })),
+      });
+
       await db.task.update({
         where: { id: taskId },
         data: {
@@ -416,6 +674,7 @@ export async function runTask(taskId: string) {
       );
       return;
     }
+
     await state(taskId, "NEEDS_ATTENTION", "Manager stopped at the configured iteration limit");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -430,4 +689,6 @@ export async function runTask(taskId: string) {
 }
 
 export { McpTools } from "./mcp.js";
-export { GeminiModel, type AgentModel } from "./model.js";
+export { RoleModel, GeminiModel, type AgentModel } from "./model.js";
+export { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
+export { attemptHistory };

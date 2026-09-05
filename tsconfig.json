@@ -1,11 +1,38 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/shared" },
-    { "path": "packages/database" },
-    { "path": "packages/policy" },
-    { "path": "packages/agent" },
-    { "path": "apps/api" },
-    { "path": "apps/worker" }
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "packages/database"
+    },
+    {
+      "path": "packages/policy"
+    },
+    {
+      "path": "packages/adapters"
+    },
+    {
+      "path": "packages/agent"
+    },
+    {
+      "path": "packages/mcp/repository"
+    },
+    {
+      "path": "packages/mcp/git"
+    },
+    {
+      "path": "packages/mcp/runner"
+    },
+    {
+      "path": "packages/mcp/github"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/worker"
+    }
   ]
 }

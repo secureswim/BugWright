@@ -21,7 +21,8 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "smoke:mcp": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/smoke-mcp.ts",
-    "test": "vitest run packages/policy/src/index.test.ts packages/agent/src/state-machine.test.ts packages/agent/src/parallel.test.ts packages/agent/src/context.test.ts apps/api/src/resume.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
