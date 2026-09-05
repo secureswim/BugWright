@@ -17,9 +17,54 @@ await app.register(cors, { origin: process.env.WEB_ORIGIN ?? "http://localhost:3
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const boss = new PgBoss({ connectionString });
-await boss.start();
-await boss.createQueue("run-task");
-await boss.createQueue("publish-task");
+
+/**
+ * Queue readiness, tracked rather than awaited at module scope.
+ *
+ * `boss.start()` used to run before `app.listen()`, so if PostgreSQL was not up
+ * the process exited during boot and never bound a port. The browser then saw
+ * "Failed to fetch" — the least informative possible symptom for the most
+ * common local setup mistake, and from an API whose `/health` endpoint exists
+ * precisely to report that the database is unreachable.
+ *
+ * The server now always listens. If the queue is not ready, `/health` says so
+ * and the endpoints that enqueue work return 503 with an actionable message.
+ */
+let queueReady = false;
+let queueError: string | undefined;
+
+async function connectQueue(): Promise<void> {
+  try {
+    await boss.start();
+    await boss.createQueue("run-task");
+    await boss.createQueue("publish-task");
+    queueReady = true;
+    queueError = undefined;
+    app.log.info("Job queue connected");
+  } catch (error) {
+    queueReady = false;
+    queueError = error instanceof Error ? error.message : String(error);
+    app.log.warn(
+      { err: queueError },
+      "PostgreSQL is unreachable. The API is running in a degraded state and will keep retrying. " +
+        "Start it with: docker compose up -d postgres",
+    );
+    // Keep retrying in the background so the API recovers on its own once the
+    // database appears, without the developer restarting anything.
+    setTimeout(() => void connectQueue(), 5_000).unref();
+  }
+}
+void connectQueue();
+
+/** Guard for endpoints that cannot work without the queue. */
+const requireQueue = (reply: { code: (status: number) => { send: (body: unknown) => unknown } }) =>
+  reply.code(503).send({
+    error:
+      "The job queue is unavailable because PostgreSQL is not reachable. " +
+      "Run `docker compose up -d postgres`, then `npm run db:push`.",
+    detail: queueError,
+  });
+
 const json = (value: unknown) =>
   JSON.parse(JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v)));
 
@@ -53,14 +98,19 @@ async function dockerAvailable() {
 
 app.get("/health", async () => {
   let database = true;
+  let databaseError: string | undefined;
   try {
     await db.$queryRaw`SELECT 1`;
-  } catch {
+  } catch (error) {
     database = false;
+    databaseError = error instanceof Error ? error.message : String(error);
   }
   return {
-    ok: database,
+    ok: database && queueReady,
     database,
+    databaseError,
+    queue: queueReady,
+    queueError,
     docker: await dockerAvailable(),
     models: modelHealth(),
     gemini: Boolean(process.env.GEMINI_API_KEY),
@@ -70,10 +120,30 @@ app.get("/health", async () => {
     ),
   };
 });
-app.get("/tasks", async () =>
-  json(await db.task.findMany({ orderBy: { createdAt: "desc" }, take: 30, include: { testRuns: true } })),
-);
-app.get("/metrics", async () => evaluationMetrics());
+app.get("/tasks", async (_req, reply) => {
+  try {
+    return json(
+      await db.task.findMany({ orderBy: { createdAt: "desc" }, take: 30, include: { testRuns: true } }),
+    );
+  } catch (error) {
+    return reply.code(503).send({
+      error:
+        "Could not read tasks. PostgreSQL is unreachable, or the schema is out of date. " +
+        "Run `docker compose up -d postgres`, then `npm run db:generate && npm run db:push`.",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+app.get("/metrics", async (_req, reply) => {
+  try {
+    return await evaluationMetrics();
+  } catch (error) {
+    return reply.code(503).send({
+      error: "Metrics are unavailable while the database is unreachable or the schema is out of date.",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
 app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
   const task = await db.task.findUnique({
     where: { id: req.params.id },
@@ -89,6 +159,7 @@ app.get<{ Params: { id: string } }>("/tasks/:id", async (req, reply) => {
   return json(task);
 });
 app.post("/tasks", async (req, reply) => {
+  if (!queueReady) return requireQueue(reply);
   const parsed = createTaskSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
   const input = parsed.data;
@@ -103,6 +174,7 @@ app.post("/tasks", async (req, reply) => {
   return reply.code(201).send(json(task));
 });
 app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => {
+  if (!queueReady) return requireQueue(reply);
   const task = await db.task.findUnique({
     where: { id: req.params.id },
     include: { testRuns: true, approvals: { orderBy: { createdAt: "desc" }, take: 1 } },
@@ -179,6 +251,7 @@ app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => 
 app.post<{ Params: { id: string }; Body: { decision?: string; note?: string } }>(
   "/tasks/:id/decision",
   async (req, reply) => {
+    if (!queueReady) return requireQueue(reply);
     const task = await db.task.findUnique({ where: { id: req.params.id }, include: { testRuns: true } });
     if (!task) return reply.code(404).send({ error: "Task not found" });
     if (task.state !== "AWAITING_HUMAN_APPROVAL")

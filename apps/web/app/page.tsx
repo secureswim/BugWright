@@ -120,6 +120,7 @@ export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]),
     [selected, setSelected] = useState<string>(),
     [health, setHealth] = useState<Health>(),
+    [apiError, setApiError] = useState<string>(),
     [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
     try {
@@ -129,6 +130,22 @@ export default function Home() {
       ]);
       if (taskResponse.ok) setTasks(await taskResponse.json());
       if (healthResponse.ok) setHealth(await healthResponse.json());
+      // A 503 carries an actionable message from the API; surface it rather
+      // than leaving the dashboard silently empty.
+      if (!taskResponse.ok) {
+        const body = await taskResponse.json().catch(() => ({}));
+        setApiError(body.error ?? `The API returned ${taskResponse.status} for /tasks.`);
+      } else {
+        setApiError(undefined);
+      }
+    } catch {
+      // The API is unreachable. This is polled every 4 seconds, so an
+      // unhandled rejection here would fill the console and, in development,
+      // throw a full-screen overlay over a working UI.
+      setApiError(
+        `Cannot reach the BugPilot API at ${API}. Start PostgreSQL with \`docker compose up -d postgres\`, ` +
+          "then run `npm run dev` and check the api process for errors.",
+      );
     } finally {
       setLoading(false);
     }
@@ -141,6 +158,12 @@ export default function Home() {
   return (
     <main>
       <Header health={health} />
+      {apiError && (
+        <div className="apiBanner" role="alert">
+          <AlertTriangle size={15} />
+          <span>{apiError}</span>
+        </div>
+      )}
       {selected ? (
         <TaskDetail
           id={selected}
