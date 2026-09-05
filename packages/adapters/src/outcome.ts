@@ -31,6 +31,45 @@ export function detectNoTestsCollected(output: string): boolean {
 }
 
 /**
+ * Signals that a test file could not be loaded, parsed or resolved.
+ *
+ * Distinct from a failing assertion, and it matters for the same reason as an
+ * empty run: a test that never executed is not evidence of anything. A
+ * reproduction test containing JSX saved with a `.ts` extension fails this way
+ * every time, before and after the patch, which otherwise looks exactly like a
+ * bug that will not go away.
+ */
+const TRANSFORM_ERROR_PATTERNS: RegExp[] = [
+  /Transform failed/i,
+  /SyntaxError:/,
+  /Failed to load url/i,
+  /Failed to resolve import/i,
+  /Cannot find module/i,
+  /ERR_MODULE_NOT_FOUND/,
+  /Parsing error:/i,
+  /Unexpected token .* in /i,
+];
+
+export function detectTransformError(output: string): boolean {
+  if (!output.trim()) return false;
+  return TRANSFORM_ERROR_PATTERNS.some((pattern) => pattern.test(output));
+}
+
+/**
+ * Whether a tool's output mentions any of the files a patch touched.
+ *
+ * Used to tell "this check is complaining about the change" from "this
+ * repository already had these problems". A project with pre-existing lint or
+ * type errors would otherwise block every patch forever, however correct the
+ * patch is - and many real repositories are in exactly that state.
+ */
+export function implicatesAnyFile(output: string, projectRelativeFiles: string[]): boolean {
+  if (!projectRelativeFiles.length || !output.trim()) return false;
+  const normalized = output.replaceAll("\\", "/");
+  return projectRelativeFiles.some((file) => file.length > 0 && normalized.includes(file));
+}
+
+/**
  * Rewrites a repository-relative path as project-relative.
  *
  * Paths reach the runner relative to the repository root (`git diff` and the

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectNoTestsCollected, relativeToProject } from "./outcome.js";
+import {
+  detectNoTestsCollected,
+  detectTransformError,
+  implicatesAnyFile,
+  relativeToProject,
+} from "./outcome.js";
 
 /**
  * These guard a production failure that cost a whole run.
@@ -72,5 +77,72 @@ describe("detectNoTestsCollected", () => {
     // be downgraded to "nothing ran", or a genuine bug would be dismissed.
     const output = "Test Files  1 failed (1)\n     Tests  1 failed (1)\n  AssertionError";
     expect(detectNoTestsCollected(output)).toBe(false);
+  });
+});
+
+/**
+ * A reproduction test containing JSX saved as `.ts` fails to parse identically
+ * before and after the patch, which looks exactly like a bug that will not go
+ * away - so the Coder revises a correct change until the revision limit stops
+ * the run.
+ */
+describe("detectTransformError", () => {
+  it.each([
+    ["esbuild JSX in a .ts file", "Error: Transform failed with 1 error:\nsrc/test/login.test.ts:13:12"],
+    ["a syntax error", "SyntaxError: Unexpected end of input"],
+    ["an unresolved import", 'Error: Failed to resolve import "@/pages/Login" from src/test/a.test.tsx'],
+    ["a missing module", "Cannot find module '@/context/AuthContext'"],
+    ["a vite load failure", "Failed to load url /src/pages/Login (resolved id: ...)"],
+  ])("recognises %s", (_label, output) => {
+    expect(detectTransformError(output)).toBe(true);
+  });
+
+  it.each([
+    ["an assertion failure", "AssertionError: expected null not to be null\n  1 failed"],
+    ["a passing run", "Test Files  1 passed (1)"],
+    ["an empty run", "No test files found"],
+  ])("does not misread %s as a transform error", (_label, output) => {
+    expect(detectTransformError(output)).toBe(false);
+  });
+});
+
+/**
+ * Many real repositories carry pre-existing lint or type errors. Treating those
+ * as evidence about a patch blocks every patch forever, however correct it is -
+ * and a script defined as `eslint .` ignores any files passed to it, so
+ * scoping the command is a request rather than a guarantee.
+ */
+describe("implicatesAnyFile", () => {
+  const eslintOutput = [
+    "/workspace/frontend/src/components/ui/command.tsx",
+    "  24:11  error  An interface declaring no members ...",
+    "/workspace/frontend/src/pages/Reports.tsx",
+    "  104:60  error  Unexpected any ...",
+  ].join("\n");
+
+  it("is true when the output names a changed file", () => {
+    expect(implicatesAnyFile(eslintOutput, ["src/pages/Reports.tsx"])).toBe(true);
+  });
+
+  it("is false when every complaint is about untouched files", () => {
+    expect(implicatesAnyFile(eslintOutput, ["src/pages/Login.tsx"])).toBe(false);
+  });
+
+  it("matches an absolute container path by its project-relative suffix", () => {
+    expect(
+      implicatesAnyFile("/workspace/frontend/src/pages/Login.tsx\n 1:1 error", ["src/pages/Login.tsx"]),
+    ).toBe(true);
+  });
+
+  it("normalises backslashes in the output", () => {
+    expect(implicatesAnyFile("C:\\work\\src\\pages\\Login.tsx error", ["src/pages/Login.tsx"])).toBe(true);
+  });
+
+  it("is false with nothing changed, rather than blaming the patch", () => {
+    expect(implicatesAnyFile(eslintOutput, [])).toBe(false);
+  });
+
+  it("is false for empty output", () => {
+    expect(implicatesAnyFile("", ["src/a.ts"])).toBe(false);
   });
 });

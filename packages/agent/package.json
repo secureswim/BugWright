@@ -9,6 +9,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@bugpilot/adapters": "*",
     "@bugpilot/database": "*",
     "@bugpilot/policy": "*",
     "@bugpilot/shared": "*",

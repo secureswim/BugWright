@@ -29,6 +29,7 @@ import {
   testerContext,
 } from "./context.js";
 import { changedFilesFromDiff } from "./scope.js";
+import { detectTransformError, implicatesAnyFile, relativeToProject } from "@bugpilot/adapters";
 
 /* -------------------------------------------------------------------------- */
 /* Tool declarations                                                           */
@@ -792,6 +793,7 @@ export async function tester(
     const testsRun: string[] = [];
     const failures: TestReport["failures"] = [];
     const notConfigured: string[] = [];
+    const advisories: string[] = [];
 
     /* ---- dependencies ---- */
     const prepared = await call<RunnerResult>("prepare_dependencies", { projectPath });
@@ -830,13 +832,18 @@ export async function tester(
       await record(result);
       if (result.status !== "ran") {
         notConfigured.push(`reproduction: ${result.reason}`);
-      } else if (result.noTestsCollected) {
+      } else if (
+        result.noTestsCollected ||
+        detectTransformError(`${result.stdout ?? ""}\n${result.stderr ?? ""}`)
+      ) {
         // Not a verdict about the patch. Sending the Coder to revise on this
         // would be chasing a runner problem with source changes.
         reproductionFixed = "not-run";
         failures.push({
           command: result.command ?? "",
-          message: `The reproduction test ${reproductionTestPath} could not be collected by the test runner`,
+          message:
+            `The reproduction test ${reproductionTestPath} could not be run: the test runner could not ` +
+            `collect or parse it. Check that its file extension matches its contents (JSX needs .tsx).`,
           relevantOutput: (result.stderr || result.stdout || "").slice(-4000),
           category: "infrastructure",
         });
@@ -873,18 +880,29 @@ export async function tester(
     }
 
     /* ---- static checks ---- */
+    // A repository with pre-existing lint or type errors would otherwise block
+    // every patch forever, however correct the patch is - and many real
+    // repositories are in exactly that state. A static check only counts as
+    // evidence about this patch when it names a file the patch touched.
+    const changedInProject = changed.map((file) => relativeToProject(projectPath, file));
+
     const typecheckResult = await call<RunnerResult>("run_typecheck", { projectPath });
     await record(typecheckResult);
     const typecheck = statusOf(typecheckResult);
     if (typecheckResult.status === "ran") {
       testsRun.push(typecheckResult.command ?? "typecheck");
       if (typecheckResult.exitCode !== 0) {
-        failures.push({
-          command: typecheckResult.command ?? "",
-          message: "Type checking failed",
-          relevantOutput: (typecheckResult.stderr || typecheckResult.stdout || "").slice(-4000),
-          category: "code",
-        });
+        const output = `${typecheckResult.stdout ?? ""}\n${typecheckResult.stderr ?? ""}`;
+        if (implicatesAnyFile(output, changedInProject)) {
+          failures.push({
+            command: typecheckResult.command ?? "",
+            message: "Type checking failed on a file this patch changed",
+            relevantOutput: output.slice(-4000),
+            category: "code",
+          });
+        } else {
+          advisories.push("type checking reports pre-existing errors outside the changed files");
+        }
       }
     } else {
       notConfigured.push(`typecheck: ${typecheckResult.reason}`);
@@ -896,14 +914,20 @@ export async function tester(
     if (lintResult.status === "ran") {
       testsRun.push(lintResult.command ?? "lint");
       if (lintResult.exitCode !== 0) {
-        // Lint runs scoped to the changed files, so a failure here is about
-        // this patch rather than the repository's pre-existing debt.
-        failures.push({
-          command: lintResult.command ?? "",
-          message: "Lint failed on the changed files",
-          relevantOutput: (lintResult.stderr || lintResult.stdout || "").slice(-4000),
-          category: "code",
-        });
+        // Scoping lint to the changed files is a request, not a guarantee: a
+        // script defined as `eslint .` ignores the extra arguments entirely and
+        // reports the whole repository.
+        const output = `${lintResult.stdout ?? ""}\n${lintResult.stderr ?? ""}`;
+        if (implicatesAnyFile(output, changedInProject)) {
+          failures.push({
+            command: lintResult.command ?? "",
+            message: "Lint failed on a file this patch changed",
+            relevantOutput: output.slice(-4000),
+            category: "code",
+          });
+        } else {
+          advisories.push("lint reports pre-existing problems outside the changed files");
+        }
       }
     } else {
       notConfigured.push(`lint: ${lintResult.reason}`);
@@ -935,7 +959,10 @@ export async function tester(
       testsRun,
       failures,
       notConfigured,
-      summary: `${summaryParts.join("; ")}.${notConfigured.length ? ` Skipped: ${notConfigured.join(", ")}.` : ""}`,
+      summary:
+        `${summaryParts.join("; ")}.` +
+        `${notConfigured.length ? ` Skipped: ${notConfigured.join(", ")}.` : ""}` +
+        `${advisories.length ? ` Advisory: ${advisories.join("; ")}.` : ""}`,
       suggestedNextAction: passed ? undefined : infrastructure ? "NEEDS_ATTENTION" : "CODER",
     });
   } catch (error) {

@@ -6,7 +6,12 @@ export * from "./types.js";
 export { NodeAdapter, scopeToProject } from "./node.js";
 export { PythonAdapter } from "./python.js";
 export { findProjectDirectories } from "./walk.js";
-export { detectNoTestsCollected, relativeToProject } from "./outcome.js";
+export {
+  detectNoTestsCollected,
+  detectTransformError,
+  implicatesAnyFile,
+  relativeToProject,
+} from "./outcome.js";
 
 /** Every adapter BugPilot ships. Order decides ties when a repo matches several. */
 export const adapters: LanguageAdapter[] = [new NodeAdapter(), new PythonAdapter()];

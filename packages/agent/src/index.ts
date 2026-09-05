@@ -30,6 +30,7 @@ import {
   routeAfterTest,
 } from "./state-machine.js";
 import { assessScope, changedFilesFromDiff } from "./scope.js";
+import { detectTransformError } from "@bugpilot/adapters";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
 
@@ -317,10 +318,12 @@ export async function runTask(taskId: string) {
         const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
         // A runner that collected no tests also exits non-zero. Treating that
         // as a failing test would record a reproduction that never ran.
-        if (result.noTestsCollected) {
+        if (result.noTestsCollected || detectTransformError(output)) {
           return {
             failed: false,
-            output: `The test runner collected no tests for ${testPath}.\n${output}`,
+            output:
+              `The test runner could not collect or parse ${testPath}, so it never ran. ` +
+              `Check that the file extension matches its contents.\n${output}`,
             ran: false,
           };
         }
