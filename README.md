@@ -26,13 +26,13 @@ MCP provides the tool interface; the multi-agent layer provides delegation and r
 
 ## Agent boundaries
 
-| Role | Input | Output | Capabilities |
-| --- | --- | --- | --- |
-| Manager | issue and reports | plan or next-role decision | orchestration only |
-| Researcher | issue, optional failure evidence | `ResearchReport` | bounded reads, search, history |
-| Coder | issue, research, revision evidence | `PatchProposal` | bounded reads and exact-context patching |
-| Tester | issue and current diff | `TestReport` | fixed Docker test/typecheck/lint operations |
-| Reviewer | issue, research, diff, tests | `ReviewReport` | bounded reads and Git inspection |
+| Role       | Input                              | Output                     | Capabilities                                |
+| ---------- | ---------------------------------- | -------------------------- | ------------------------------------------- |
+| Manager    | issue and reports                  | plan or next-role decision | orchestration only                          |
+| Researcher | issue, optional failure evidence   | `ResearchReport`           | bounded reads, search, history              |
+| Coder      | issue, research, revision evidence | `PatchProposal`            | bounded reads and exact-context patching    |
+| Tester     | issue and current diff             | `TestReport`               | fixed Docker test/typecheck/lint operations |
+| Reviewer   | issue, research, diff, tests       | `ReviewReport`             | bounded reads and Git inspection            |
 
 The model never constructs shell commands. Runner operations map validated enums to fixed commands. The model never receives the Docker socket, Gemini key, GitHub credentials, or paths outside the task workspace.
 

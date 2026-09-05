@@ -1,3 +1,36 @@
 import { ManagerDecision, ReviewReport, TestReport } from "@bugpilot/shared";
-export function routeAfterTest(report:TestReport,requested:ManagerDecision|undefined,revisionCycle:number,maxRevisions:number):ManagerDecision{if(report.passed)return{next:"REVIEWER",reason:"All selected empirical checks passed."};if(report.suggestedNextAction==="NEEDS_ATTENTION")return{next:"NEEDS_ATTENTION",reason:report.summary};if(revisionCycle>=maxRevisions)return{next:"NEEDS_ATTENTION",reason:"The configured revision limit was reached."};if(requested?.next==="RESEARCHER"||requested?.next==="CODER")return requested;return{next:report.suggestedNextAction??"CODER",reason:"A failed check requires a scoped investigation or code revision."};}
-export function routeAfterReview(report:ReviewReport,requested:ManagerDecision|undefined,revisionCycle:number,maxRevisions:number):ManagerDecision{if(report.decision==="approve")return{next:"HUMAN_APPROVAL",reason:"Independent technical review approved the tested patch."};if(revisionCycle>=maxRevisions)return{next:"NEEDS_ATTENTION",reason:"Reviewer rejected the patch at the revision limit."};if(requested?.next==="RESEARCHER"||requested?.next==="CODER"||requested?.next==="NEEDS_ATTENTION")return requested;return{next:"CODER",reason:"Reviewer findings require a new code revision followed by fresh tests."};}
+export function routeAfterTest(
+  report: TestReport,
+  requested: ManagerDecision | undefined,
+  revisionCycle: number,
+  maxRevisions: number,
+): ManagerDecision {
+  if (report.passed) return { next: "REVIEWER", reason: "All selected empirical checks passed." };
+  if (report.suggestedNextAction === "NEEDS_ATTENTION")
+    return { next: "NEEDS_ATTENTION", reason: report.summary };
+  if (revisionCycle >= maxRevisions)
+    return { next: "NEEDS_ATTENTION", reason: "The configured revision limit was reached." };
+  if (requested?.next === "RESEARCHER" || requested?.next === "CODER") return requested;
+  return {
+    next: report.suggestedNextAction ?? "CODER",
+    reason: "A failed check requires a scoped investigation or code revision.",
+  };
+}
+export function routeAfterReview(
+  report: ReviewReport,
+  requested: ManagerDecision | undefined,
+  revisionCycle: number,
+  maxRevisions: number,
+): ManagerDecision {
+  if (report.decision === "approve")
+    return { next: "HUMAN_APPROVAL", reason: "Independent technical review approved the tested patch." };
+  if (revisionCycle >= maxRevisions)
+    return { next: "NEEDS_ATTENTION", reason: "Reviewer rejected the patch at the revision limit." };
+  if (
+    requested?.next === "RESEARCHER" ||
+    requested?.next === "CODER" ||
+    requested?.next === "NEEDS_ATTENTION"
+  )
+    return requested;
+  return { next: "CODER", reason: "Reviewer findings require a new code revision followed by fresh tests." };
+}

@@ -5,55 +5,428 @@ import { db, TaskState } from "@bugpilot/database";
 import { ManagerPlan, PatchProposal, ResearchReport, ReviewReport, TestReport } from "@bugpilot/shared";
 import { approvalHash, resolveInside } from "@bugpilot/policy";
 import { McpTools, parseToolJson } from "./mcp.js";
-import { coder, managerDecide, managerPlan, managerSynthesize, researcher, reviewer, tester } from "./roles.js";
+import {
+  coder,
+  managerDecide,
+  managerPlan,
+  managerSynthesize,
+  researcher,
+  reviewer,
+  tester,
+} from "./roles.js";
 import { routeAfterReview, routeAfterTest } from "./state-machine.js";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
 
-async function exists(value:string){try{await access(value);return true}catch{return false}}
-async function event(taskId:string,type:string,title:string,detail?:string,iteration=0){await db.taskEvent.create({data:{taskId,type,title,detail,agentRole:"MANAGER",status:"COMPLETED",iteration}});}
-async function state(taskId:string,next:TaskState,title:string,iteration=0){await db.task.update({where:{id:taskId},data:{state:next,currentAgent:"MANAGER"}});await event(taskId,"STATE_CHANGED",title,undefined,iteration);}
-async function command(command:string,args:string[],cwd:string){return await new Promise<{code:number;stdout:string;stderr:string}>((resolve,reject)=>{const child=spawn(command,args,{cwd,windowsHide:true,shell:false});let stdout="",stderr="";child.stdout.on("data",d=>stdout+=d);child.stderr.on("data",d=>stderr+=d);child.on("error",reject);child.on("close",code=>resolve({code:code??-1,stdout,stderr}));});}
-
-async function prepare(task:Awaited<ReturnType<typeof db.task.findUniqueOrThrow>>,repoRoot:string,workspaceRoot:string){
-  if(task.workspacePath===repoRoot&&task.baseCommit&&await exists(path.join(repoRoot,".git")))return task.baseCommit;
-  await rm(repoRoot,{recursive:true,force:true});
-  if(task.demoMode){const fixture=path.join(projectRoot(),"fixtures","calculator-bug");await cp(fixture,repoRoot,{recursive:true});await command("git",["init","-b","main"],repoRoot);await command("git",["add","."],repoRoot);await command("git",["-c","user.name=BugPilot","-c","user.email=bugpilot@local","commit","-m","fixture"],repoRoot);}
-  else{const cloned=await command("git",["clone","--depth","1","--branch",task.baseBranch,"--",task.repositoryUrl,repoRoot],workspaceRoot);if(cloned.code!==0)throw new Error(`Clone failed: ${cloned.stderr.slice(-2000)}`);}
-  const head=await command("git",["rev-parse","HEAD"],repoRoot);if(head.code!==0)throw new Error("Could not resolve base commit");return head.stdout.trim();
+async function exists(value: string) {
+  try {
+    await access(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function event(taskId: string, type: string, title: string, detail?: string, iteration = 0) {
+  await db.taskEvent.create({
+    data: { taskId, type, title, detail, agentRole: "MANAGER", status: "COMPLETED", iteration },
+  });
+}
+async function state(taskId: string, next: TaskState, title: string, iteration = 0) {
+  await db.task.update({ where: { id: taskId }, data: { state: next, currentAgent: "MANAGER" } });
+  await event(taskId, "STATE_CHANGED", title, undefined, iteration);
+}
+async function command(command: string, args: string[], cwd: string) {
+  return await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, { cwd, windowsHide: true, shell: false });
+    let stdout = "",
+      stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+  });
 }
 
-export async function runTask(taskId:string){
-  const runStarted=Date.now();let task=await db.task.findUniqueOrThrow({where:{id:taskId}});const resumeState=task.state,startingModelCalls=task.modelCalls,startingAgentRuns=await db.agentRun.count({where:{taskId}});if(task.executionMode==="SINGLE_AGENT"){await state(taskId,"NEEDS_ATTENTION","Single-agent baseline runner is scaffolded for evaluation but not enabled yet");return;}const workspaceRoot=configuredWorkspaceRoot(),repoRoot=resolveInside(workspaceRoot,task.id);let mcp:McpTools|undefined;
-  try{
-    await state(taskId,"PREPARING","Manager is preparing a resumable task workspace");await mkdir(workspaceRoot,{recursive:true});const base=await prepare(task,repoRoot,workspaceRoot);await db.task.update({where:{id:taskId},data:{workspacePath:repoRoot,baseCommit:base,error:null}});
-    mcp=new McpTools(taskId,repoRoot);await mcp.connect(["repository","git","runner",...(!task.issueTitle?["github" as const]:[])]);let title=task.issueTitle,body=task.issueBody??"";
-    if(!title){const issue=parseToolJson<{title:string;body:string}>(await mcp.callTrusted("github","read_issue",{owner:task.repositoryOwner,repo:task.repositoryName,issueNumber:task.issueNumber}));title=issue.title;body=issue.body;await db.task.update({where:{id:taskId},data:{issueTitle:title,issueBody:body}});}
-    const issue={repository:`${task.repositoryOwner}/${task.repositoryName}`,number:task.issueNumber,title:title!,body,baseBranch:task.baseBranch};
-    task=await db.task.findUniqueOrThrow({where:{id:taskId}});let plan=task.managerPlan as unknown as ManagerPlan|null,managerRunId="";if(!plan){await state(taskId,"PLANNING","Manager is creating the dynamic delegation plan");const planned=await managerPlan(taskId,issue,mcp);plan=planned.plan;managerRunId=planned.runId;await db.task.update({where:{id:taskId},data:{managerPlan:plan as never,plan:plan.objective}});}else{managerRunId=(await db.agentRun.findFirst({where:{taskId,role:"MANAGER"},orderBy:{startedAt:"asc"}}))?.id??"";}
-    let research=task.researchReport as unknown as ResearchReport|null,reports:ResearchReport[]=[],researchArtifacts:string[]=[];if(!research){
-      const stored=await db.agentMessage.findMany({where:{taskId,type:{startsWith:"RESEARCH_REPORT:"}},orderBy:{createdAt:"asc"}}),completedByObjective=new Map<string,{report:ResearchReport;artifactId:string}>();
-      for(const item of stored){const report=item.payload as unknown as ResearchReport,key=report.objective??`${report.taskType}:${item.id}`;if(!completedByObjective.has(key))completedByObjective.set(key,{report,artifactId:item.id});}
-      const completedObjectives=new Set([...completedByObjective.keys()]),pending=plan.researchTasks.filter(item=>!completedObjectives.has(item.objective));
-      await state(taskId,"RESEARCHING",`Manager launched ${pending.length} remaining research task(s)`,0);
-      const outcomes=await runBoundedParallel(pending,3,async researchTask=>{try{return await researcher(taskId,issue,researchTask,mcp!,0,managerRunId);}catch{return null;}});
-      const successful=outcomes.filter((item):item is NonNullable<typeof item>=>item!==null);
-      reports=[...completedByObjective.values()].map(item=>item.report).concat(successful.map(item=>item.report));researchArtifacts=[...completedByObjective.values()].map(item=>item.artifactId).concat(successful.map(item=>item.artifactId));
-      if(!reports.length)throw new Error("All research agents failed before producing evidence");
-      const synthesis=await managerSynthesize(taskId,issue,reports,researchArtifacts,mcp,managerRunId,0);research=synthesis.report;researchArtifacts.push(synthesis.artifactId);await db.task.update({where:{id:taskId},data:{researchReport:research as never}});
-    }else{const stored=await db.agentMessage.findMany({where:{taskId,type:{startsWith:"RESEARCH_REPORT:"}},orderBy:{createdAt:"asc"}});reports=stored.map(item=>item.payload as unknown as ResearchReport);researchArtifacts=stored.map(item=>item.id);if(!reports.length)reports=[research];}
-    let revision=task.revisionCycle,testAttempts=task.attempt,patch=task.patchProposal as unknown as PatchProposal|null,diff=task.diff??"",reuseExistingPatch=Boolean(patch&&diff&&(resumeState==="TESTING"||resumeState==="REVIEWING")),reuseVerifiedTests=Boolean(resumeState==="REVIEWING"&&task.testReport&&(task.testReport as unknown as TestReport).passed);let lastEvidence:TestReport|ReviewReport|undefined;
-    while(revision<=task.maxRevisions&&testAttempts<task.maxAttempts){
-      const usage=await db.task.findUniqueOrThrow({where:{id:taskId},include:{_count:{select:{agentRuns:true}}}});if(usage.modelCalls-startingModelCalls>=usage.maxModelCalls||usage._count.agentRuns-startingAgentRuns>=usage.maxAgentRuns||Date.now()-runStarted>usage.timeoutMs){await state(taskId,"NEEDS_ATTENTION","Manager stopped at the configured run, model, or wall-clock budget",revision);return;}
-      const resumedTests=reuseVerifiedTests;let testReport:TestReport,testArtifactId="";if(reuseVerifiedTests){testReport=task.testReport as unknown as TestReport;testArtifactId=(await db.agentMessage.findFirst({where:{taskId,type:"TEST_REPORT"},orderBy:{createdAt:"desc"}}))?.id??"";reuseVerifiedTests=false;reuseExistingPatch=false;}else{let codeArtifactIds=researchArtifacts;if(reuseExistingPatch){await state(taskId,"TESTING","Manager resumed empirical verification of the existing patch",revision);reuseExistingPatch=false;}else{await state(taskId,revision?"RE_CODING":"CODING",revision?"Manager requested a scoped code revision":"Manager delegated implementation to the Coder",revision);const coded=await coder(taskId,issue,reports,mcp,revision,researchArtifacts,lastEvidence);patch=coded.report;const diffRaw=parseToolJson<{stdout:string}>(await mcp.call("CODER","git","get_diff",{},revision));diff=diffRaw.stdout;if(!diff.trim())throw new Error("Coder returned without a patch");await db.task.update({where:{id:taskId},data:{patchProposal:patch as never,diff,summary:patch.summary}});codeArtifactIds=[coded.artifactId];await state(taskId,"TESTING","Manager delegated empirical verification to the Tester",revision);}testAttempts++;const tested=await tester(taskId,issue,patch!,diff,mcp,testAttempts,codeArtifactIds);testReport=tested.report;testArtifactId=tested.artifactId;await db.task.update({where:{id:taskId},data:{testReport:testReport as never,attempt:testAttempts}});}
-      if(!testReport.passed){const infrastructureFailure=testReport.suggestedNextAction==="NEEDS_ATTENTION",advisory=infrastructureFailure?undefined:await managerDecide(taskId,{testReport,revisionCycle:revision},mcp,revision),decision=routeAfterTest(testReport,advisory,revision,task.maxRevisions);await event(taskId,"MANAGER_DECISION",`Manager selected ${decision.next}`,decision.reason,revision);lastEvidence=testReport;if(decision.next==="RESEARCHER"&&revision<task.maxRevisions){await state(taskId,"RE_RESEARCHING","Manager requested targeted re-investigation",revision+1);const extra=await researcher(taskId,issue,{type:"implementation",objective:`Investigate failed checks: ${testReport.summary}`},mcp,revision+1,managerRunId,testReport);reports.push(extra.report);researchArtifacts.push(extra.artifactId);}else if(decision.next!=="CODER"){await state(taskId,"NEEDS_ATTENTION",decision.reason,revision);return;}revision++;await db.task.update({where:{id:taskId},data:{revisionCycle:revision}});continue;}
-      await state(taskId,"REVIEWING",resumedTests?"Manager resumed from verified tests and delegated review":"Manager delegated an independent review",revision);const reviewed=await reviewer(taskId,issue,reports,diff,testReport,mcp,revision,[...researchArtifacts,...(testArtifactId?[testArtifactId]:[])]),review=reviewed.report;await db.task.update({where:{id:taskId},data:{reviewReport:review as never}});
-      const advisory=review.decision==="reject"?await managerDecide(taskId,{testReport,reviewReport:review,revisionCycle:revision},mcp,revision):undefined,decision=routeAfterReview(review,advisory,revision,task.maxRevisions);await event(taskId,"MANAGER_DECISION",`Manager selected ${decision.next}`,decision.reason,revision);if(decision.next==="RESEARCHER"){await state(taskId,"RE_RESEARCHING","Manager requested targeted research from reviewer findings",revision+1);const extra=await researcher(taskId,issue,{type:"implementation",objective:`Investigate reviewer findings: ${review.reasoning.slice(0,500)}`},mcp,revision+1,reviewed.runId);reports.push(extra.report);researchArtifacts.push(extra.artifactId);lastEvidence=review;revision++;await db.task.update({where:{id:taskId},data:{revisionCycle:revision}});continue;}if(decision.next==="CODER"){await state(taskId,"REVISION_REQUESTED","Reviewer rejected the patch and returned findings",revision);lastEvidence=review;revision++;await db.task.update({where:{id:taskId},data:{revisionCycle:revision}});continue;}if(decision.next!=="HUMAN_APPROVAL"){await state(taskId,"NEEDS_ATTENTION",decision.reason,revision);return;}
-      const tests=await db.testRun.findMany({where:{taskId},orderBy:{createdAt:"asc"}}),hash=approvalHash({taskId,repository:task.repositoryUrl,targetBranch:task.baseBranch,baseCommit:base,diff,tests:tests.map(t=>({command:t.command,exitCode:t.exitCode,stdout:t.stdout,stderr:t.stderr,durationMs:t.durationMs}))});
-      await db.task.update({where:{id:taskId},data:{state:"AWAITING_HUMAN_APPROVAL",currentAgent:null,diff,approvalHash:hash,reviewReport:review as never}});await event(taskId,"HUMAN_APPROVAL_REQUIRED","Reviewer approved; exact patch awaits human authorization",`Fingerprint ${hash.slice(0,16)}`,revision);return;
+async function prepare(
+  task: Awaited<ReturnType<typeof db.task.findUniqueOrThrow>>,
+  repoRoot: string,
+  workspaceRoot: string,
+) {
+  if (task.workspacePath === repoRoot && task.baseCommit && (await exists(path.join(repoRoot, ".git"))))
+    return task.baseCommit;
+  await rm(repoRoot, { recursive: true, force: true });
+  if (task.demoMode) {
+    const fixture = path.join(projectRoot(), "fixtures", "calculator-bug");
+    await cp(fixture, repoRoot, { recursive: true });
+    await command("git", ["init", "-b", "main"], repoRoot);
+    await command("git", ["add", "."], repoRoot);
+    await command(
+      "git",
+      ["-c", "user.name=BugPilot", "-c", "user.email=bugpilot@local", "commit", "-m", "fixture"],
+      repoRoot,
+    );
+  } else {
+    const cloned = await command(
+      "git",
+      ["clone", "--depth", "1", "--branch", task.baseBranch, "--", task.repositoryUrl, repoRoot],
+      workspaceRoot,
+    );
+    if (cloned.code !== 0) throw new Error(`Clone failed: ${cloned.stderr.slice(-2000)}`);
+  }
+  const head = await command("git", ["rev-parse", "HEAD"], repoRoot);
+  if (head.code !== 0) throw new Error("Could not resolve base commit");
+  return head.stdout.trim();
+}
+
+export async function runTask(taskId: string) {
+  const runStarted = Date.now();
+  let task = await db.task.findUniqueOrThrow({ where: { id: taskId } });
+  const resumeState = task.state,
+    startingModelCalls = task.modelCalls,
+    startingAgentRuns = await db.agentRun.count({ where: { taskId } });
+  if (task.executionMode === "SINGLE_AGENT") {
+    await state(
+      taskId,
+      "NEEDS_ATTENTION",
+      "Single-agent baseline runner is scaffolded for evaluation but not enabled yet",
+    );
+    return;
+  }
+  const workspaceRoot = configuredWorkspaceRoot(),
+    repoRoot = resolveInside(workspaceRoot, task.id);
+  let mcp: McpTools | undefined;
+  try {
+    await state(taskId, "PREPARING", "Manager is preparing a resumable task workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    const base = await prepare(task, repoRoot, workspaceRoot);
+    await db.task.update({
+      where: { id: taskId },
+      data: { workspacePath: repoRoot, baseCommit: base, error: null },
+    });
+    mcp = new McpTools(taskId, repoRoot);
+    await mcp.connect(["repository", "git", "runner", ...(!task.issueTitle ? ["github" as const] : [])]);
+    let title = task.issueTitle,
+      body = task.issueBody ?? "";
+    if (!title) {
+      const issue = parseToolJson<{ title: string; body: string }>(
+        await mcp.callTrusted("github", "read_issue", {
+          owner: task.repositoryOwner,
+          repo: task.repositoryName,
+          issueNumber: task.issueNumber,
+        }),
+      );
+      title = issue.title;
+      body = issue.body;
+      await db.task.update({ where: { id: taskId }, data: { issueTitle: title, issueBody: body } });
     }
-    await state(taskId,"NEEDS_ATTENTION","Manager stopped at the configured iteration limit");
-  }catch(error){const message=error instanceof Error?error.message:String(error);await db.task.update({where:{id:taskId},data:{state:"FAILED",currentAgent:null,error:message}}).catch(()=>{});await event(taskId,"RUN_FAILED","Multi-agent run failed",message).catch(()=>{});throw error;}finally{await mcp?.close();}
+    const issue = {
+      repository: `${task.repositoryOwner}/${task.repositoryName}`,
+      number: task.issueNumber,
+      title: title!,
+      body,
+      baseBranch: task.baseBranch,
+    };
+    task = await db.task.findUniqueOrThrow({ where: { id: taskId } });
+    let plan = task.managerPlan as unknown as ManagerPlan | null,
+      managerRunId = "";
+    if (!plan) {
+      await state(taskId, "PLANNING", "Manager is creating the dynamic delegation plan");
+      const planned = await managerPlan(taskId, issue, mcp);
+      plan = planned.plan;
+      managerRunId = planned.runId;
+      await db.task.update({
+        where: { id: taskId },
+        data: { managerPlan: plan as never, plan: plan.objective },
+      });
+    } else {
+      managerRunId =
+        (await db.agentRun.findFirst({ where: { taskId, role: "MANAGER" }, orderBy: { startedAt: "asc" } }))
+          ?.id ?? "";
+    }
+    let research = task.researchReport as unknown as ResearchReport | null,
+      reports: ResearchReport[] = [],
+      researchArtifacts: string[] = [];
+    if (!research) {
+      const stored = await db.agentMessage.findMany({
+          where: { taskId, type: { startsWith: "RESEARCH_REPORT:" } },
+          orderBy: { createdAt: "asc" },
+        }),
+        completedByObjective = new Map<string, { report: ResearchReport; artifactId: string }>();
+      for (const item of stored) {
+        const report = item.payload as unknown as ResearchReport,
+          key = report.objective ?? `${report.taskType}:${item.id}`;
+        if (!completedByObjective.has(key)) completedByObjective.set(key, { report, artifactId: item.id });
+      }
+      const completedObjectives = new Set([...completedByObjective.keys()]),
+        pending = plan.researchTasks.filter((item) => !completedObjectives.has(item.objective));
+      await state(taskId, "RESEARCHING", `Manager launched ${pending.length} remaining research task(s)`, 0);
+      const outcomes = await runBoundedParallel(pending, 3, async (researchTask) => {
+        try {
+          return await researcher(taskId, issue, researchTask, mcp!, 0, managerRunId);
+        } catch {
+          return null;
+        }
+      });
+      const successful = outcomes.filter((item): item is NonNullable<typeof item> => item !== null);
+      reports = [...completedByObjective.values()]
+        .map((item) => item.report)
+        .concat(successful.map((item) => item.report));
+      researchArtifacts = [...completedByObjective.values()]
+        .map((item) => item.artifactId)
+        .concat(successful.map((item) => item.artifactId));
+      if (!reports.length) throw new Error("All research agents failed before producing evidence");
+      const synthesis = await managerSynthesize(
+        taskId,
+        issue,
+        reports,
+        researchArtifacts,
+        mcp,
+        managerRunId,
+        0,
+      );
+      research = synthesis.report;
+      researchArtifacts.push(synthesis.artifactId);
+      await db.task.update({ where: { id: taskId }, data: { researchReport: research as never } });
+    } else {
+      const stored = await db.agentMessage.findMany({
+        where: { taskId, type: { startsWith: "RESEARCH_REPORT:" } },
+        orderBy: { createdAt: "asc" },
+      });
+      reports = stored.map((item) => item.payload as unknown as ResearchReport);
+      researchArtifacts = stored.map((item) => item.id);
+      if (!reports.length) reports = [research];
+    }
+    let revision = task.revisionCycle,
+      testAttempts = task.attempt,
+      patch = task.patchProposal as unknown as PatchProposal | null,
+      diff = task.diff ?? "",
+      reuseExistingPatch = Boolean(
+        patch && diff && (resumeState === "TESTING" || resumeState === "REVIEWING"),
+      ),
+      reuseVerifiedTests = Boolean(
+        resumeState === "REVIEWING" && task.testReport && (task.testReport as unknown as TestReport).passed,
+      );
+    let lastEvidence: TestReport | ReviewReport | undefined;
+    while (revision <= task.maxRevisions && testAttempts < task.maxAttempts) {
+      const usage = await db.task.findUniqueOrThrow({
+        where: { id: taskId },
+        include: { _count: { select: { agentRuns: true } } },
+      });
+      if (
+        usage.modelCalls - startingModelCalls >= usage.maxModelCalls ||
+        usage._count.agentRuns - startingAgentRuns >= usage.maxAgentRuns ||
+        Date.now() - runStarted > usage.timeoutMs
+      ) {
+        await state(
+          taskId,
+          "NEEDS_ATTENTION",
+          "Manager stopped at the configured run, model, or wall-clock budget",
+          revision,
+        );
+        return;
+      }
+      const resumedTests = reuseVerifiedTests;
+      let testReport: TestReport,
+        testArtifactId = "";
+      if (reuseVerifiedTests) {
+        testReport = task.testReport as unknown as TestReport;
+        testArtifactId =
+          (
+            await db.agentMessage.findFirst({
+              where: { taskId, type: "TEST_REPORT" },
+              orderBy: { createdAt: "desc" },
+            })
+          )?.id ?? "";
+        reuseVerifiedTests = false;
+        reuseExistingPatch = false;
+      } else {
+        let codeArtifactIds = researchArtifacts;
+        if (reuseExistingPatch) {
+          await state(
+            taskId,
+            "TESTING",
+            "Manager resumed empirical verification of the existing patch",
+            revision,
+          );
+          reuseExistingPatch = false;
+        } else {
+          await state(
+            taskId,
+            revision ? "RE_CODING" : "CODING",
+            revision
+              ? "Manager requested a scoped code revision"
+              : "Manager delegated implementation to the Coder",
+            revision,
+          );
+          const coded = await coder(taskId, issue, reports, mcp, revision, researchArtifacts, lastEvidence);
+          patch = coded.report;
+          const diffRaw = parseToolJson<{ stdout: string }>(
+            await mcp.call("CODER", "git", "get_diff", {}, revision),
+          );
+          diff = diffRaw.stdout;
+          if (!diff.trim()) throw new Error("Coder returned without a patch");
+          await db.task.update({
+            where: { id: taskId },
+            data: { patchProposal: patch as never, diff, summary: patch.summary },
+          });
+          codeArtifactIds = [coded.artifactId];
+          await state(taskId, "TESTING", "Manager delegated empirical verification to the Tester", revision);
+        }
+        testAttempts++;
+        const tested = await tester(taskId, issue, patch!, diff, mcp, testAttempts, codeArtifactIds);
+        testReport = tested.report;
+        testArtifactId = tested.artifactId;
+        await db.task.update({
+          where: { id: taskId },
+          data: { testReport: testReport as never, attempt: testAttempts },
+        });
+      }
+      if (!testReport.passed) {
+        const infrastructureFailure = testReport.suggestedNextAction === "NEEDS_ATTENTION",
+          advisory = infrastructureFailure
+            ? undefined
+            : await managerDecide(taskId, { testReport, revisionCycle: revision }, mcp, revision),
+          decision = routeAfterTest(testReport, advisory, revision, task.maxRevisions);
+        await event(
+          taskId,
+          "MANAGER_DECISION",
+          `Manager selected ${decision.next}`,
+          decision.reason,
+          revision,
+        );
+        lastEvidence = testReport;
+        if (decision.next === "RESEARCHER" && revision < task.maxRevisions) {
+          await state(taskId, "RE_RESEARCHING", "Manager requested targeted re-investigation", revision + 1);
+          const extra = await researcher(
+            taskId,
+            issue,
+            { type: "implementation", objective: `Investigate failed checks: ${testReport.summary}` },
+            mcp,
+            revision + 1,
+            managerRunId,
+            testReport,
+          );
+          reports.push(extra.report);
+          researchArtifacts.push(extra.artifactId);
+        } else if (decision.next !== "CODER") {
+          await state(taskId, "NEEDS_ATTENTION", decision.reason, revision);
+          return;
+        }
+        revision++;
+        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        continue;
+      }
+      await state(
+        taskId,
+        "REVIEWING",
+        resumedTests
+          ? "Manager resumed from verified tests and delegated review"
+          : "Manager delegated an independent review",
+        revision,
+      );
+      const reviewed = await reviewer(taskId, issue, reports, diff, testReport, mcp, revision, [
+          ...researchArtifacts,
+          ...(testArtifactId ? [testArtifactId] : []),
+        ]),
+        review = reviewed.report;
+      await db.task.update({ where: { id: taskId }, data: { reviewReport: review as never } });
+      const advisory =
+          review.decision === "reject"
+            ? await managerDecide(
+                taskId,
+                { testReport, reviewReport: review, revisionCycle: revision },
+                mcp,
+                revision,
+              )
+            : undefined,
+        decision = routeAfterReview(review, advisory, revision, task.maxRevisions);
+      await event(taskId, "MANAGER_DECISION", `Manager selected ${decision.next}`, decision.reason, revision);
+      if (decision.next === "RESEARCHER") {
+        await state(
+          taskId,
+          "RE_RESEARCHING",
+          "Manager requested targeted research from reviewer findings",
+          revision + 1,
+        );
+        const extra = await researcher(
+          taskId,
+          issue,
+          {
+            type: "implementation",
+            objective: `Investigate reviewer findings: ${review.reasoning.slice(0, 500)}`,
+          },
+          mcp,
+          revision + 1,
+          reviewed.runId,
+        );
+        reports.push(extra.report);
+        researchArtifacts.push(extra.artifactId);
+        lastEvidence = review;
+        revision++;
+        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        continue;
+      }
+      if (decision.next === "CODER") {
+        await state(
+          taskId,
+          "REVISION_REQUESTED",
+          "Reviewer rejected the patch and returned findings",
+          revision,
+        );
+        lastEvidence = review;
+        revision++;
+        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        continue;
+      }
+      if (decision.next !== "HUMAN_APPROVAL") {
+        await state(taskId, "NEEDS_ATTENTION", decision.reason, revision);
+        return;
+      }
+      const tests = await db.testRun.findMany({ where: { taskId }, orderBy: { createdAt: "asc" } }),
+        hash = approvalHash({
+          taskId,
+          repository: task.repositoryUrl,
+          targetBranch: task.baseBranch,
+          baseCommit: base,
+          diff,
+          tests: tests.map((t) => ({
+            command: t.command,
+            exitCode: t.exitCode,
+            stdout: t.stdout,
+            stderr: t.stderr,
+            durationMs: t.durationMs,
+          })),
+        });
+      await db.task.update({
+        where: { id: taskId },
+        data: {
+          state: "AWAITING_HUMAN_APPROVAL",
+          currentAgent: null,
+          diff,
+          approvalHash: hash,
+          reviewReport: review as never,
+        },
+      });
+      await event(
+        taskId,
+        "HUMAN_APPROVAL_REQUIRED",
+        "Reviewer approved; exact patch awaits human authorization",
+        `Fingerprint ${hash.slice(0, 16)}`,
+        revision,
+      );
+      return;
+    }
+    await state(taskId, "NEEDS_ATTENTION", "Manager stopped at the configured iteration limit");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await db.task
+      .update({ where: { id: taskId }, data: { state: "FAILED", currentAgent: null, error: message } })
+      .catch(() => {});
+    await event(taskId, "RUN_FAILED", "Multi-agent run failed", message).catch(() => {});
+    throw error;
+  } finally {
+    await mcp?.close();
+  }
 }
 
 export { McpTools } from "./mcp.js";

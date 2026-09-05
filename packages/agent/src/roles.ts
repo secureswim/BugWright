@@ -1,32 +1,698 @@
 import { db } from "@bugpilot/database";
-import { AgentRole, ManagerDecision, ManagerPlan, PatchProposal, ResearchReport, ResearchTask, ReviewReport, TestReport, managerDecisionSchema, managerPlanSchema, patchProposalSchema, researchReportSchema, reviewReportSchema } from "@bugpilot/shared";
+import {
+  AgentRole,
+  ManagerDecision,
+  ManagerPlan,
+  PatchProposal,
+  ResearchReport,
+  ResearchTask,
+  ReviewReport,
+  TestReport,
+  managerDecisionSchema,
+  managerPlanSchema,
+  patchProposalSchema,
+  researchReportSchema,
+  reviewReportSchema,
+} from "@bugpilot/shared";
 import { GeminiModel, AgentModel, ModelResult, ModelTool, parseStructured } from "./model.js";
 import { McpTools, parseToolJson } from "./mcp.js";
 import { coderContext, researchContext, reviewerContext, testerContext } from "./context.js";
 
-const definitions:Record<string,ModelTool>={list_tree:{name:"list_tree",description:"List repository paths",parameters:{type:"OBJECT",properties:{depth:{type:"NUMBER"}},required:["depth"]}},search_code:{name:"search_code",description:"Search repository text",parameters:{type:"OBJECT",properties:{query:{type:"STRING"},glob:{type:"STRING"}},required:["query"]}},read_file:{name:"read_file",description:"Read one bounded source file",parameters:{type:"OBJECT",properties:{path:{type:"STRING"}},required:["path"]}},read_range:{name:"read_range",description:"Read a bounded line range",parameters:{type:"OBJECT",properties:{path:{type:"STRING"},startLine:{type:"NUMBER"},endLine:{type:"NUMBER"}},required:["path","startLine","endLine"]}},apply_patch:{name:"apply_patch",description:"Replace one exact unique text block",parameters:{type:"OBJECT",properties:{path:{type:"STRING"},oldText:{type:"STRING"},newText:{type:"STRING"}},required:["path","oldText","newText"]}},get_history:{name:"get_history",description:"Read bounded Git history",parameters:{type:"OBJECT",properties:{}}},get_changed_files:{name:"get_changed_files",description:"List changed files",parameters:{type:"OBJECT",properties:{}}},get_status:{name:"get_status",description:"Read Git status",parameters:{type:"OBJECT",properties:{}}},get_diff:{name:"get_diff",description:"Read the current diff",parameters:{type:"OBJECT",properties:{}}}};
-const mapping:Record<string,["repository"|"git",string]>={list_tree:["repository","list_tree"],search_code:["repository","search_code"],read_file:["repository","read_file"],read_range:["repository","read_range"],apply_patch:["repository","apply_patch"],get_history:["git","get_history"],get_changed_files:["git","get_changed_files"],get_status:["git","get_status"],get_diff:["git","get_diff"]};
-type RoleResult<T>={report:T;runId:string;artifactId:string};
-const asList=(value:unknown):unknown[]=>value===undefined||value===null?[]:Array.isArray(value)?value:[value];
-const asStrings=(value:unknown):string[]=>asList(value).map(item=>{if(typeof item==="string")return item;if(item&&typeof item==="object"){const record=item as Record<string,unknown>;for(const key of ["title","description","risk","path","name","message"]){if(typeof record[key]==="string")return record[key] as string;}}return JSON.stringify(item);});
-const asConfidence=(value:unknown):unknown=>{if(typeof value==="number")return value;if(typeof value!=="string")return value;const normalized=value.trim().toLowerCase();if(normalized==="high")return .9;if(normalized==="medium")return .6;if(normalized==="low")return .3;const numeric=Number(normalized.replace(/%$/, ""));return Number.isFinite(numeric)?(normalized.endsWith("%")?numeric/100:numeric):value;};
-const planContract={parse:(value:unknown):ManagerPlan=>{const v=value as Record<string,unknown>;return managerPlanSchema.parse({...v,researchTasks:asList(v.researchTasks),steps:asList(v.steps),risks:asStrings(v.risks)});}};
-const researchContract={parse:(value:unknown):ResearchReport=>{const v=value as Record<string,unknown>,fallback=typeof v.summary==="string"?v.summary:"Research evidence is recorded below.";return researchReportSchema.parse({...v,diagnosis:typeof v.diagnosis==="string"?v.diagnosis:fallback,evidence:asList(v.evidence),relevantFiles:asStrings(v.relevantFiles),relevantTests:asStrings(v.relevantTests),proposedApproach:typeof v.proposedApproach==="string"?v.proposedApproach:typeof v.recommendation==="string"?v.recommendation:"Use the cited evidence to implement the smallest scoped fix.",risks:asStrings(v.risks),confidence:asConfidence(v.confidence??.5)});}};
-const patchContract={parse:(value:unknown):PatchProposal=>{const v=value as Record<string,unknown>;return patchProposalSchema.parse({...v,filesChanged:asStrings(v.filesChanged),riskNotes:asStrings(v.riskNotes)});}};
-const reviewContract={parse:(value:unknown):ReviewReport=>{const v=value as Record<string,unknown>;return reviewReportSchema.parse({...v,findings:asList(v.findings)});}};
-async function message(taskId:string,from:AgentRole,to:AgentRole,type:string,payload:unknown,iteration:number){const record=await db.agentMessage.create({data:{taskId,fromRole:from,toRole:to,type,payload:payload as never,iteration}});await db.taskEvent.create({data:{taskId,type:"AGENT_MESSAGE",title:`${from} → ${to}: ${type}`,agentRole:from,status:"COMPLETED",iteration,output:{artifactId:record.id}}});return record.id;}
-async function modelRole<T>(input:{taskId:string;role:Exclude<AgentRole,"TESTER">;iteration:number;objective:string;payload:unknown;system:string;tools:string[];mcp:McpTools;schema?:{parse:(v:unknown)=>T};model?:AgentModel;maxTurns?:number;parentRunId?:string;inputArtifactIds?:string[]}){
-  const started=Date.now(),run=await db.agentRun.create({data:{taskId:input.taskId,role:input.role,objective:input.objective,parentRunId:input.parentRunId,status:"RUNNING",iteration:input.iteration,input:input.payload as never,inputArtifactIds:input.inputArtifactIds??[],model:process.env.GEMINI_MODEL??"gemini-3.8-flash",toolsUsed:input.tools,contextChars:JSON.stringify(input.payload).length}});await db.task.update({where:{id:input.taskId},data:{currentAgent:input.role,delegationCycles:{increment:1}}});await db.taskEvent.create({data:{taskId:input.taskId,type:"AGENT_STARTED",title:`${input.role}: ${input.objective}`,agentRole:input.role,status:"RUNNING",iteration:input.iteration}});
-  let result:ModelResult|undefined;try{result=await(input.model??new GeminiModel()).generate({system:input.system,input:input.payload,tools:input.tools.map(t=>definitions[t]),maxTurns:input.maxTurns??8,execute:async(name,args)=>{const pair=mapping[name];if(!pair)throw new Error(`Unknown tool ${name}`);return input.mcp.call(input.role,pair[0],pair[1],args,input.iteration);}});const raw=parseStructured<T>(result.text),output=input.schema?input.schema.parse(raw):raw,duration=Date.now()-started;await db.agentRun.update({where:{id:run.id},data:{status:"COMPLETED",output:output as never,modelCalls:result.modelCalls,toolCalls:result.toolCalls,finishedAt:new Date(),durationMs:duration}});await db.task.update({where:{id:input.taskId},data:{modelCalls:{increment:result.modelCalls}}});await db.taskEvent.create({data:{taskId:input.taskId,type:"AGENT_COMPLETED",title:`${input.role} completed: ${input.objective}`,agentRole:input.role,status:"COMPLETED",durationMs:duration,iteration:input.iteration}});return{output,runId:run.id};}catch(error){const detail=error instanceof Error?error.message:String(error),usage=error as {modelCalls?:number;toolCalls?:number},modelCalls=result?.modelCalls??usage.modelCalls??0,toolCalls=result?.toolCalls??usage.toolCalls??0;await db.agentRun.update({where:{id:run.id},data:{status:"FAILED",error:detail,modelCalls,toolCalls,finishedAt:new Date(),durationMs:Date.now()-started}});if(modelCalls)await db.task.update({where:{id:input.taskId},data:{modelCalls:{increment:modelCalls}}});throw error;}
+const definitions: Record<string, ModelTool> = {
+  list_tree: {
+    name: "list_tree",
+    description: "List repository paths",
+    parameters: { type: "OBJECT", properties: { depth: { type: "NUMBER" } }, required: ["depth"] },
+  },
+  search_code: {
+    name: "search_code",
+    description: "Search repository text",
+    parameters: {
+      type: "OBJECT",
+      properties: { query: { type: "STRING" }, glob: { type: "STRING" } },
+      required: ["query"],
+    },
+  },
+  read_file: {
+    name: "read_file",
+    description: "Read one bounded source file",
+    parameters: { type: "OBJECT", properties: { path: { type: "STRING" } }, required: ["path"] },
+  },
+  read_range: {
+    name: "read_range",
+    description: "Read a bounded line range",
+    parameters: {
+      type: "OBJECT",
+      properties: { path: { type: "STRING" }, startLine: { type: "NUMBER" }, endLine: { type: "NUMBER" } },
+      required: ["path", "startLine", "endLine"],
+    },
+  },
+  apply_patch: {
+    name: "apply_patch",
+    description: "Replace one exact unique text block",
+    parameters: {
+      type: "OBJECT",
+      properties: { path: { type: "STRING" }, oldText: { type: "STRING" }, newText: { type: "STRING" } },
+      required: ["path", "oldText", "newText"],
+    },
+  },
+  get_history: {
+    name: "get_history",
+    description: "Read bounded Git history",
+    parameters: { type: "OBJECT", properties: {} },
+  },
+  get_changed_files: {
+    name: "get_changed_files",
+    description: "List changed files",
+    parameters: { type: "OBJECT", properties: {} },
+  },
+  get_status: {
+    name: "get_status",
+    description: "Read Git status",
+    parameters: { type: "OBJECT", properties: {} },
+  },
+  get_diff: {
+    name: "get_diff",
+    description: "Read the current diff",
+    parameters: { type: "OBJECT", properties: {} },
+  },
+};
+const mapping: Record<string, ["repository" | "git", string]> = {
+  list_tree: ["repository", "list_tree"],
+  search_code: ["repository", "search_code"],
+  read_file: ["repository", "read_file"],
+  read_range: ["repository", "read_range"],
+  apply_patch: ["repository", "apply_patch"],
+  get_history: ["git", "get_history"],
+  get_changed_files: ["git", "get_changed_files"],
+  get_status: ["git", "get_status"],
+  get_diff: ["git", "get_diff"],
+};
+type RoleResult<T> = { report: T; runId: string; artifactId: string };
+const asList = (value: unknown): unknown[] =>
+  value === undefined || value === null ? [] : Array.isArray(value) ? value : [value];
+const asStrings = (value: unknown): string[] =>
+  asList(value).map((item) => {
+    if (typeof item === "string") return item;
+    if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      for (const key of ["title", "description", "risk", "path", "name", "message"]) {
+        if (typeof record[key] === "string") return record[key] as string;
+      }
+    }
+    return JSON.stringify(item);
+  });
+const asConfidence = (value: unknown): unknown => {
+  if (typeof value === "number") return value;
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high") return 0.9;
+  if (normalized === "medium") return 0.6;
+  if (normalized === "low") return 0.3;
+  const numeric = Number(normalized.replace(/%$/, ""));
+  return Number.isFinite(numeric) ? (normalized.endsWith("%") ? numeric / 100 : numeric) : value;
+};
+const planContract = {
+  parse: (value: unknown): ManagerPlan => {
+    const v = value as Record<string, unknown>;
+    return managerPlanSchema.parse({
+      ...v,
+      researchTasks: asList(v.researchTasks),
+      steps: asList(v.steps),
+      risks: asStrings(v.risks),
+    });
+  },
+};
+const researchContract = {
+  parse: (value: unknown): ResearchReport => {
+    const v = value as Record<string, unknown>,
+      fallback = typeof v.summary === "string" ? v.summary : "Research evidence is recorded below.";
+    return researchReportSchema.parse({
+      ...v,
+      diagnosis: typeof v.diagnosis === "string" ? v.diagnosis : fallback,
+      evidence: asList(v.evidence),
+      relevantFiles: asStrings(v.relevantFiles),
+      relevantTests: asStrings(v.relevantTests),
+      proposedApproach:
+        typeof v.proposedApproach === "string"
+          ? v.proposedApproach
+          : typeof v.recommendation === "string"
+            ? v.recommendation
+            : "Use the cited evidence to implement the smallest scoped fix.",
+      risks: asStrings(v.risks),
+      confidence: asConfidence(v.confidence ?? 0.5),
+    });
+  },
+};
+const patchContract = {
+  parse: (value: unknown): PatchProposal => {
+    const v = value as Record<string, unknown>;
+    return patchProposalSchema.parse({
+      ...v,
+      filesChanged: asStrings(v.filesChanged),
+      riskNotes: asStrings(v.riskNotes),
+    });
+  },
+};
+const reviewContract = {
+  parse: (value: unknown): ReviewReport => {
+    const v = value as Record<string, unknown>;
+    return reviewReportSchema.parse({ ...v, findings: asList(v.findings) });
+  },
+};
+async function message(
+  taskId: string,
+  from: AgentRole,
+  to: AgentRole,
+  type: string,
+  payload: unknown,
+  iteration: number,
+) {
+  const record = await db.agentMessage.create({
+    data: { taskId, fromRole: from, toRole: to, type, payload: payload as never, iteration },
+  });
+  await db.taskEvent.create({
+    data: {
+      taskId,
+      type: "AGENT_MESSAGE",
+      title: `${from} → ${to}: ${type}`,
+      agentRole: from,
+      status: "COMPLETED",
+      iteration,
+      output: { artifactId: record.id },
+    },
+  });
+  return record.id;
 }
-async function finish<T>(taskId:string,runId:string,from:AgentRole,to:AgentRole,type:string,report:T,iteration:number):Promise<RoleResult<T>>{const artifactId=await message(taskId,from,to,type,report,iteration);await db.agentRun.update({where:{id:runId},data:{outputArtifactId:artifactId}});return{report,runId,artifactId};}
+async function modelRole<T>(input: {
+  taskId: string;
+  role: Exclude<AgentRole, "TESTER">;
+  iteration: number;
+  objective: string;
+  payload: unknown;
+  system: string;
+  tools: string[];
+  mcp: McpTools;
+  schema?: { parse: (v: unknown) => T };
+  model?: AgentModel;
+  maxTurns?: number;
+  parentRunId?: string;
+  inputArtifactIds?: string[];
+}) {
+  const started = Date.now(),
+    run = await db.agentRun.create({
+      data: {
+        taskId: input.taskId,
+        role: input.role,
+        objective: input.objective,
+        parentRunId: input.parentRunId,
+        status: "RUNNING",
+        iteration: input.iteration,
+        input: input.payload as never,
+        inputArtifactIds: input.inputArtifactIds ?? [],
+        model: process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
+        toolsUsed: input.tools,
+        contextChars: JSON.stringify(input.payload).length,
+      },
+    });
+  await db.task.update({
+    where: { id: input.taskId },
+    data: { currentAgent: input.role, delegationCycles: { increment: 1 } },
+  });
+  await db.taskEvent.create({
+    data: {
+      taskId: input.taskId,
+      type: "AGENT_STARTED",
+      title: `${input.role}: ${input.objective}`,
+      agentRole: input.role,
+      status: "RUNNING",
+      iteration: input.iteration,
+    },
+  });
+  let result: ModelResult | undefined;
+  try {
+    result = await (input.model ?? new GeminiModel()).generate({
+      system: input.system,
+      input: input.payload,
+      tools: input.tools.map((t) => definitions[t]),
+      maxTurns: input.maxTurns ?? 8,
+      execute: async (name, args) => {
+        const pair = mapping[name];
+        if (!pair) throw new Error(`Unknown tool ${name}`);
+        return input.mcp.call(input.role, pair[0], pair[1], args, input.iteration);
+      },
+    });
+    const raw = parseStructured<T>(result.text),
+      output = input.schema ? input.schema.parse(raw) : raw,
+      duration = Date.now() - started;
+    await db.agentRun.update({
+      where: { id: run.id },
+      data: {
+        status: "COMPLETED",
+        output: output as never,
+        modelCalls: result.modelCalls,
+        toolCalls: result.toolCalls,
+        finishedAt: new Date(),
+        durationMs: duration,
+      },
+    });
+    await db.task.update({
+      where: { id: input.taskId },
+      data: { modelCalls: { increment: result.modelCalls } },
+    });
+    await db.taskEvent.create({
+      data: {
+        taskId: input.taskId,
+        type: "AGENT_COMPLETED",
+        title: `${input.role} completed: ${input.objective}`,
+        agentRole: input.role,
+        status: "COMPLETED",
+        durationMs: duration,
+        iteration: input.iteration,
+      },
+    });
+    return { output, runId: run.id };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error),
+      usage = error as { modelCalls?: number; toolCalls?: number },
+      modelCalls = result?.modelCalls ?? usage.modelCalls ?? 0,
+      toolCalls = result?.toolCalls ?? usage.toolCalls ?? 0;
+    await db.agentRun.update({
+      where: { id: run.id },
+      data: {
+        status: "FAILED",
+        error: detail,
+        modelCalls,
+        toolCalls,
+        finishedAt: new Date(),
+        durationMs: Date.now() - started,
+      },
+    });
+    if (modelCalls)
+      await db.task.update({ where: { id: input.taskId }, data: { modelCalls: { increment: modelCalls } } });
+    throw error;
+  }
+}
+async function finish<T>(
+  taskId: string,
+  runId: string,
+  from: AgentRole,
+  to: AgentRole,
+  type: string,
+  report: T,
+  iteration: number,
+): Promise<RoleResult<T>> {
+  const artifactId = await message(taskId, from, to, type, report, iteration);
+  await db.agentRun.update({ where: { id: runId }, data: { outputArtifactId: artifactId } });
+  return { report, runId, artifactId };
+}
 
-export async function managerPlan(taskId:string,issue:unknown,mcp:McpTools,iteration=0){const payload={issue,limits:{researchRuns:3,testAttempts:3,revisionCycles:2},availableRoles:["RESEARCHER","CODER","TESTER","REVIEWER"]},result=await modelRole<ManagerPlan>({taskId,role:"MANAGER",iteration,objective:"Plan dynamic delegation",payload,mcp,tools:[],schema:planContract,system:"You are BugPilot's Manager. Decide whether implementation, tests, and history investigations are useful. Select 1-3 independent researchTasks. You have no repository tools. Return ONLY JSON {objective,researchTasks:[{type:'implementation'|'tests'|'history',objective}],steps:[{role,goal}],risks}. Avoid unnecessary agents."}),artifactId=await message(taskId,"MANAGER","RESEARCHER","RESEARCH_PLAN",result.output,iteration);await db.agentRun.update({where:{id:result.runId},data:{outputArtifactId:artifactId}});return{plan:result.output,runId:result.runId,artifactId};}
-export async function managerSynthesize(taskId:string,issue:unknown,reports:ResearchReport[],artifactIds:string[],mcp:McpTools,parentRunId:string,iteration:number){const result=await modelRole<ResearchReport>({taskId,role:"MANAGER",iteration,objective:"Synthesize independent research",payload:{issue,researchReports:reports},mcp,tools:[],schema:researchContract,parentRunId,inputArtifactIds:artifactIds,system:"You are BugPilot's Manager. Synthesize the independent research reports into one actionable report without inventing evidence. Resolve conflicts explicitly in risks and preserve concrete paths. Return ONLY JSON matching ResearchReport."});return finish(taskId,result.runId,"MANAGER","CODER","SYNTHESIZED_RESEARCH",result.output,iteration);}
-export async function managerDecide(taskId:string,context:{testReport?:TestReport;reviewReport?:ReviewReport;revisionCycle:number},mcp:McpTools,iteration:number){const result=await modelRole<ManagerDecision>({taskId,role:"MANAGER",iteration,objective:"Select smallest recovery action",payload:context,mcp,tools:[],schema:managerDecisionSchema,system:"Choose the smallest next action from structured evidence. Return ONLY JSON {next,reason,targetAgent,iterationNumber}. Valid next: RESEARCHER, CODER, TESTER, REVIEWER, HUMAN_APPROVAL, NEEDS_ATTENTION. Failed tests usually need CODER; unclear diagnosis needs RESEARCHER."});return result.output;}
-export async function researcher(taskId:string,issue:unknown,researchTask:ResearchTask,mcp:McpTools,iteration:number,parentRunId:string,previous?:TestReport):Promise<RoleResult<ResearchReport>>{const requestId=await message(taskId,"MANAGER","RESEARCHER",`RESEARCH_REQUEST:${researchTask.type}`,researchTask,iteration),tools=researchTask.type==="history"?["get_history","get_status","get_diff","get_changed_files"]:["list_tree","search_code","read_file","read_range"],payload={...researchContext(issue,researchTask),previousTestFailure:previous??null},result=await modelRole<ResearchReport>({taskId,role:"RESEARCHER",iteration,objective:researchTask.objective,payload,mcp,tools,schema:researchContract,maxTurns:10,parentRunId,inputArtifactIds:[requestId],system:`You are an isolated read-only ${researchTask.type} Researcher. Investigate only the assigned objective. Never edit or execute. Return ONLY JSON {taskType:'${researchTask.type}',objective,diagnosis,evidence:[{path,line?,observation}],relevantFiles,relevantTests,proposedApproach,risks,confidence}. Use concrete evidence. Finish as soon as you have enough concrete evidence; do not exhaustively browse.`});result.output.taskType=researchTask.type;result.output.objective=researchTask.objective;return finish(taskId,result.runId,"RESEARCHER","MANAGER",`RESEARCH_REPORT:${researchTask.type}`,result.output,iteration);}
-export async function coder(taskId:string,issue:unknown,reports:ResearchReport[],mcp:McpTools,iteration:number,inputArtifactIds:string[],previous?:TestReport|ReviewReport):Promise<RoleResult<PatchProposal>>{const result=await modelRole<PatchProposal>({taskId,role:"CODER",iteration,objective:previous?"Revise patch from evidence":"Implement researched fix",payload:coderContext(issue,reports,previous),mcp,tools:["list_tree","search_code","read_file","read_range","apply_patch","get_status","get_diff","get_changed_files"],schema:patchContract,maxTurns:10,inputArtifactIds,system:"You are BugPilot's Coder. Implement only the requested fix using exact-context apply_patch. You cannot run tests, publish, or approve. Make a minimal change, inspect the diff, then return ONLY JSON {summary,filesChanged,rationale,riskNotes}. If a tool reports an error, inspect the current file and retry with corrected exact context."});return finish(taskId,result.runId,"CODER","MANAGER","CODE_CHANGE_SUMMARY",result.output,iteration);}
-export async function tester(taskId:string,issue:unknown,patch:PatchProposal,diff:string,mcp:McpTools,iteration:number,inputArtifactIds:string[]):Promise<RoleResult<TestReport>>{const started=Date.now(),input=testerContext(issue,patch,diff),run=await db.agentRun.create({data:{taskId,role:"TESTER",objective:"Empirically verify current patch",status:"RUNNING",iteration,input:input as never,inputArtifactIds,model:"deterministic",toolsUsed:["detect_project","prepare_dependencies","run_test","run_typecheck","run_lint"],contextChars:JSON.stringify(input).length}});await db.task.update({where:{id:taskId},data:{currentAgent:"TESTER",delegationCycles:{increment:1}}});let toolCalls=0;
-  try{toolCalls++;type DetectedProject={projectPath?:string;scripts?:Record<string,string>;packageManager?:"npm"|"pnpm"|"yarn";hasLockfile?:boolean};const detected=parseToolJson<DetectedProject&{projects?:DetectedProject[]}>(await mcp.call("TESTER","runner","detect_project",{},iteration)),projects=detected.projects?.length?detected.projects:[detected],changed=[...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map(match=>match[1].trim()),selected=projects.filter(project=>{const prefix=project.projectPath??".";return prefix==="."||changed.some(file=>file===prefix||file.startsWith(`${prefix}/`));}).sort((a,b)=>(b.projectPath?.length??0)-(a.projectPath?.length??0))[0]??projects[0],projectPath=selected.projectPath??".",manager=selected.packageManager??"npm",prefix=projectPath==="."?"":`cd ${projectPath} && `,testsRun:string[]=[],failures:TestReport["failures"]=[],advisories:string[]=[];if(selected.hasLockfile){toolCalls++;const prepared=parseToolJson<{exitCode:number;stderr:string;stdout:string;durationMs:number;command:string}>(await mcp.call("TESTER","runner","prepare_dependencies",{packageManager:manager,projectPath},iteration));testsRun.push(`${prefix}${prepared.command}`);await db.testRun.create({data:{taskId,command:`${prefix}${prepared.command}`,exitCode:prepared.exitCode,stdout:prepared.stdout,stderr:prepared.stderr,durationMs:prepared.durationMs}});if(prepared.exitCode!==0){const failure={command:`${prefix}${prepared.command}`,message:"Locked dependency installation failed",relevantOutput:(prepared.stderr||prepared.stdout).slice(-4000),category:"infrastructure" as const},report:TestReport={passed:false,testsRun,failures:[failure],summary:`Runner infrastructure could not prepare dependencies: ${failure.relevantOutput.slice(-500)}`,suggestedNextAction:"NEEDS_ATTENTION"},duration=Date.now()-started;await db.agentRun.update({where:{id:run.id},data:{status:"COMPLETED",output:report as never,toolCalls,finishedAt:new Date(),durationMs:duration}});return finish(taskId,run.id,"TESTER","MANAGER","TEST_REPORT",report,iteration);}}const checks:Array<[string,"run_test"|"run_typecheck"|"run_lint"]>=[];if(selected.scripts?.test)checks.push([`${prefix}${manager==="npm"?"npm test":`${manager} test`}`,"run_test"]);if(selected.scripts?.typecheck)checks.push([`${prefix}${manager} ${manager==="yarn"?"":"run "}typecheck`,"run_typecheck"]);if(selected.scripts?.lint)checks.push([`${prefix}${manager} ${manager==="yarn"?"":"run "}lint`,"run_lint"]);if(!checks.length)checks.push([`${prefix}npm test`,"run_test"]);let typecheckPassed:boolean|undefined,lintPassed:boolean|undefined;for(const [command,tool]of checks.slice(0,3)){toolCalls++;testsRun.push(command);const value=parseToolJson<{exitCode:number;stdout:string;stderr:string;durationMs:number;command:string}>(await mcp.call("TESTER","runner",tool,{packageManager:manager,projectPath},iteration)),output=`${value.stdout}\n${value.stderr}`.replaceAll("\\","/");await db.testRun.create({data:{taskId,command:`${prefix}${value.command??command.replace(prefix,"")}`,exitCode:value.exitCode,stdout:value.stdout,stderr:value.stderr,durationMs:value.durationMs}});if(tool==="run_typecheck")typecheckPassed=value.exitCode===0;if(tool==="run_lint")lintPassed=value.exitCode===0;if(value.exitCode!==0){const changedInProject=changed.map(file=>projectPath==="."?file:file.startsWith(`${projectPath}/`)?file.slice(projectPath.length+1):file),touchesChangedFile=changedInProject.some(file=>output.includes(file)||output.includes(`/workspace/${projectPath==="."?file:`${projectPath}/${file}`}`));if(tool==="run_lint"&&!touchesChangedFile)advisories.push(`${command} reported existing issues outside the changed files`);else failures.push({command,message:`${command} exited ${value.exitCode}`,relevantOutput:(value.stderr||value.stdout).slice(-4000),category:"code"});}}const report:TestReport={passed:failures.length===0,testsRun,failures,typecheckPassed,lintPassed,summary:failures.length?`${failures.length} verification check(s) failed.`:`${testsRun.length} isolated check(s) completed.${advisories.length?` ${advisories.join("; ")}.`:""}`,suggestedNextAction:failures.length?"CODER":undefined},duration=Date.now()-started;await db.agentRun.update({where:{id:run.id},data:{status:"COMPLETED",output:report as never,toolCalls,finishedAt:new Date(),durationMs:duration}});return finish(taskId,run.id,"TESTER","MANAGER","TEST_REPORT",report,iteration);}catch(error){const detail=error instanceof Error?error.message:String(error);await db.agentRun.update({where:{id:run.id},data:{status:"FAILED",error:detail,toolCalls,finishedAt:new Date(),durationMs:Date.now()-started}});throw error;}}
-export async function reviewer(taskId:string,issue:unknown,reports:ResearchReport[],diff:string,tests:TestReport,mcp:McpTools,iteration:number,inputArtifactIds:string[]):Promise<RoleResult<ReviewReport>>{const result=await modelRole<ReviewReport>({taskId,role:"REVIEWER",iteration,objective:"Independently assess tested patch",payload:reviewerContext(issue,reports,diff,tests),mcp,tools:["list_tree","search_code","read_file","read_range","get_diff","get_changed_files","get_status","get_history"],schema:reviewContract,inputArtifactIds,system:"You are BugPilot's independent Reviewer in a fresh context. Inspect issue requirements, actual diff, source, tests, and test evidence. You never receive Coder private context. You are read-only. Return ONLY JSON {decision:'approve'|'reject',findings:[{severity,title,evidence}],scopeAssessment:'minimal'|'acceptable'|'too-broad',regressionRisk:'low'|'medium'|'high',reasoning}. Reject any blocking finding."});return finish(taskId,result.runId,"REVIEWER","MANAGER","REVIEW_REPORT",result.output,iteration);}
-
+export async function managerPlan(taskId: string, issue: unknown, mcp: McpTools, iteration = 0) {
+  const payload = {
+      issue,
+      limits: { researchRuns: 3, testAttempts: 3, revisionCycles: 2 },
+      availableRoles: ["RESEARCHER", "CODER", "TESTER", "REVIEWER"],
+    },
+    result = await modelRole<ManagerPlan>({
+      taskId,
+      role: "MANAGER",
+      iteration,
+      objective: "Plan dynamic delegation",
+      payload,
+      mcp,
+      tools: [],
+      schema: planContract,
+      system:
+        "You are BugPilot's Manager. Decide whether implementation, tests, and history investigations are useful. Select 1-3 independent researchTasks. You have no repository tools. Return ONLY JSON {objective,researchTasks:[{type:'implementation'|'tests'|'history',objective}],steps:[{role,goal}],risks}. Avoid unnecessary agents.",
+    }),
+    artifactId = await message(taskId, "MANAGER", "RESEARCHER", "RESEARCH_PLAN", result.output, iteration);
+  await db.agentRun.update({ where: { id: result.runId }, data: { outputArtifactId: artifactId } });
+  return { plan: result.output, runId: result.runId, artifactId };
+}
+export async function managerSynthesize(
+  taskId: string,
+  issue: unknown,
+  reports: ResearchReport[],
+  artifactIds: string[],
+  mcp: McpTools,
+  parentRunId: string,
+  iteration: number,
+) {
+  const result = await modelRole<ResearchReport>({
+    taskId,
+    role: "MANAGER",
+    iteration,
+    objective: "Synthesize independent research",
+    payload: { issue, researchReports: reports },
+    mcp,
+    tools: [],
+    schema: researchContract,
+    parentRunId,
+    inputArtifactIds: artifactIds,
+    system:
+      "You are BugPilot's Manager. Synthesize the independent research reports into one actionable report without inventing evidence. Resolve conflicts explicitly in risks and preserve concrete paths. Return ONLY JSON matching ResearchReport.",
+  });
+  return finish(taskId, result.runId, "MANAGER", "CODER", "SYNTHESIZED_RESEARCH", result.output, iteration);
+}
+export async function managerDecide(
+  taskId: string,
+  context: { testReport?: TestReport; reviewReport?: ReviewReport; revisionCycle: number },
+  mcp: McpTools,
+  iteration: number,
+) {
+  const result = await modelRole<ManagerDecision>({
+    taskId,
+    role: "MANAGER",
+    iteration,
+    objective: "Select smallest recovery action",
+    payload: context,
+    mcp,
+    tools: [],
+    schema: managerDecisionSchema,
+    system:
+      "Choose the smallest next action from structured evidence. Return ONLY JSON {next,reason,targetAgent,iterationNumber}. Valid next: RESEARCHER, CODER, TESTER, REVIEWER, HUMAN_APPROVAL, NEEDS_ATTENTION. Failed tests usually need CODER; unclear diagnosis needs RESEARCHER.",
+  });
+  return result.output;
+}
+export async function researcher(
+  taskId: string,
+  issue: unknown,
+  researchTask: ResearchTask,
+  mcp: McpTools,
+  iteration: number,
+  parentRunId: string,
+  previous?: TestReport,
+): Promise<RoleResult<ResearchReport>> {
+  const requestId = await message(
+      taskId,
+      "MANAGER",
+      "RESEARCHER",
+      `RESEARCH_REQUEST:${researchTask.type}`,
+      researchTask,
+      iteration,
+    ),
+    tools =
+      researchTask.type === "history"
+        ? ["get_history", "get_status", "get_diff", "get_changed_files"]
+        : ["list_tree", "search_code", "read_file", "read_range"],
+    payload = { ...researchContext(issue, researchTask), previousTestFailure: previous ?? null },
+    result = await modelRole<ResearchReport>({
+      taskId,
+      role: "RESEARCHER",
+      iteration,
+      objective: researchTask.objective,
+      payload,
+      mcp,
+      tools,
+      schema: researchContract,
+      maxTurns: 10,
+      parentRunId,
+      inputArtifactIds: [requestId],
+      system: `You are an isolated read-only ${researchTask.type} Researcher. Investigate only the assigned objective. Never edit or execute. Return ONLY JSON {taskType:'${researchTask.type}',objective,diagnosis,evidence:[{path,line?,observation}],relevantFiles,relevantTests,proposedApproach,risks,confidence}. Use concrete evidence. Finish as soon as you have enough concrete evidence; do not exhaustively browse.`,
+    });
+  result.output.taskType = researchTask.type;
+  result.output.objective = researchTask.objective;
+  return finish(
+    taskId,
+    result.runId,
+    "RESEARCHER",
+    "MANAGER",
+    `RESEARCH_REPORT:${researchTask.type}`,
+    result.output,
+    iteration,
+  );
+}
+export async function coder(
+  taskId: string,
+  issue: unknown,
+  reports: ResearchReport[],
+  mcp: McpTools,
+  iteration: number,
+  inputArtifactIds: string[],
+  previous?: TestReport | ReviewReport,
+): Promise<RoleResult<PatchProposal>> {
+  const result = await modelRole<PatchProposal>({
+    taskId,
+    role: "CODER",
+    iteration,
+    objective: previous ? "Revise patch from evidence" : "Implement researched fix",
+    payload: coderContext(issue, reports, previous),
+    mcp,
+    tools: [
+      "list_tree",
+      "search_code",
+      "read_file",
+      "read_range",
+      "apply_patch",
+      "get_status",
+      "get_diff",
+      "get_changed_files",
+    ],
+    schema: patchContract,
+    maxTurns: 10,
+    inputArtifactIds,
+    system:
+      "You are BugPilot's Coder. Implement only the requested fix using exact-context apply_patch. You cannot run tests, publish, or approve. Make a minimal change, inspect the diff, then return ONLY JSON {summary,filesChanged,rationale,riskNotes}. If a tool reports an error, inspect the current file and retry with corrected exact context.",
+  });
+  return finish(taskId, result.runId, "CODER", "MANAGER", "CODE_CHANGE_SUMMARY", result.output, iteration);
+}
+export async function tester(
+  taskId: string,
+  issue: unknown,
+  patch: PatchProposal,
+  diff: string,
+  mcp: McpTools,
+  iteration: number,
+  inputArtifactIds: string[],
+): Promise<RoleResult<TestReport>> {
+  const started = Date.now(),
+    input = testerContext(issue, patch, diff),
+    run = await db.agentRun.create({
+      data: {
+        taskId,
+        role: "TESTER",
+        objective: "Empirically verify current patch",
+        status: "RUNNING",
+        iteration,
+        input: input as never,
+        inputArtifactIds,
+        model: "deterministic",
+        toolsUsed: ["detect_project", "prepare_dependencies", "run_test", "run_typecheck", "run_lint"],
+        contextChars: JSON.stringify(input).length,
+      },
+    });
+  await db.task.update({
+    where: { id: taskId },
+    data: { currentAgent: "TESTER", delegationCycles: { increment: 1 } },
+  });
+  let toolCalls = 0;
+  try {
+    toolCalls++;
+    type DetectedProject = {
+      projectPath?: string;
+      scripts?: Record<string, string>;
+      packageManager?: "npm" | "pnpm" | "yarn";
+      hasLockfile?: boolean;
+    };
+    const detected = parseToolJson<DetectedProject & { projects?: DetectedProject[] }>(
+        await mcp.call("TESTER", "runner", "detect_project", {}, iteration),
+      ),
+      projects = detected.projects?.length ? detected.projects : [detected],
+      changed = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((match) => match[1].trim()),
+      selected =
+        projects
+          .filter((project) => {
+            const prefix = project.projectPath ?? ".";
+            return prefix === "." || changed.some((file) => file === prefix || file.startsWith(`${prefix}/`));
+          })
+          .sort((a, b) => (b.projectPath?.length ?? 0) - (a.projectPath?.length ?? 0))[0] ?? projects[0],
+      projectPath = selected.projectPath ?? ".",
+      manager = selected.packageManager ?? "npm",
+      prefix = projectPath === "." ? "" : `cd ${projectPath} && `,
+      testsRun: string[] = [],
+      failures: TestReport["failures"] = [],
+      advisories: string[] = [];
+    if (selected.hasLockfile) {
+      toolCalls++;
+      const prepared = parseToolJson<{
+        exitCode: number;
+        stderr: string;
+        stdout: string;
+        durationMs: number;
+        command: string;
+      }>(
+        await mcp.call(
+          "TESTER",
+          "runner",
+          "prepare_dependencies",
+          { packageManager: manager, projectPath },
+          iteration,
+        ),
+      );
+      testsRun.push(`${prefix}${prepared.command}`);
+      await db.testRun.create({
+        data: {
+          taskId,
+          command: `${prefix}${prepared.command}`,
+          exitCode: prepared.exitCode,
+          stdout: prepared.stdout,
+          stderr: prepared.stderr,
+          durationMs: prepared.durationMs,
+        },
+      });
+      if (prepared.exitCode !== 0) {
+        const failure = {
+            command: `${prefix}${prepared.command}`,
+            message: "Locked dependency installation failed",
+            relevantOutput: (prepared.stderr || prepared.stdout).slice(-4000),
+            category: "infrastructure" as const,
+          },
+          report: TestReport = {
+            passed: false,
+            testsRun,
+            failures: [failure],
+            summary: `Runner infrastructure could not prepare dependencies: ${failure.relevantOutput.slice(-500)}`,
+            suggestedNextAction: "NEEDS_ATTENTION",
+          },
+          duration = Date.now() - started;
+        await db.agentRun.update({
+          where: { id: run.id },
+          data: {
+            status: "COMPLETED",
+            output: report as never,
+            toolCalls,
+            finishedAt: new Date(),
+            durationMs: duration,
+          },
+        });
+        return finish(taskId, run.id, "TESTER", "MANAGER", "TEST_REPORT", report, iteration);
+      }
+    }
+    const checks: Array<[string, "run_test" | "run_typecheck" | "run_lint"]> = [];
+    if (selected.scripts?.test)
+      checks.push([`${prefix}${manager === "npm" ? "npm test" : `${manager} test`}`, "run_test"]);
+    if (selected.scripts?.typecheck)
+      checks.push([`${prefix}${manager} ${manager === "yarn" ? "" : "run "}typecheck`, "run_typecheck"]);
+    if (selected.scripts?.lint)
+      checks.push([`${prefix}${manager} ${manager === "yarn" ? "" : "run "}lint`, "run_lint"]);
+    if (!checks.length) checks.push([`${prefix}npm test`, "run_test"]);
+    let typecheckPassed: boolean | undefined, lintPassed: boolean | undefined;
+    for (const [command, tool] of checks.slice(0, 3)) {
+      toolCalls++;
+      testsRun.push(command);
+      const value = parseToolJson<{
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+          durationMs: number;
+          command: string;
+        }>(await mcp.call("TESTER", "runner", tool, { packageManager: manager, projectPath }, iteration)),
+        output = `${value.stdout}\n${value.stderr}`.replaceAll("\\", "/");
+      await db.testRun.create({
+        data: {
+          taskId,
+          command: `${prefix}${value.command ?? command.replace(prefix, "")}`,
+          exitCode: value.exitCode,
+          stdout: value.stdout,
+          stderr: value.stderr,
+          durationMs: value.durationMs,
+        },
+      });
+      if (tool === "run_typecheck") typecheckPassed = value.exitCode === 0;
+      if (tool === "run_lint") lintPassed = value.exitCode === 0;
+      if (value.exitCode !== 0) {
+        const changedInProject = changed.map((file) =>
+            projectPath === "."
+              ? file
+              : file.startsWith(`${projectPath}/`)
+                ? file.slice(projectPath.length + 1)
+                : file,
+          ),
+          touchesChangedFile = changedInProject.some(
+            (file) =>
+              output.includes(file) ||
+              output.includes(`/workspace/${projectPath === "." ? file : `${projectPath}/${file}`}`),
+          );
+        if (tool === "run_lint" && !touchesChangedFile)
+          advisories.push(`${command} reported existing issues outside the changed files`);
+        else
+          failures.push({
+            command,
+            message: `${command} exited ${value.exitCode}`,
+            relevantOutput: (value.stderr || value.stdout).slice(-4000),
+            category: "code",
+          });
+      }
+    }
+    const report: TestReport = {
+        passed: failures.length === 0,
+        testsRun,
+        failures,
+        typecheckPassed,
+        lintPassed,
+        summary: failures.length
+          ? `${failures.length} verification check(s) failed.`
+          : `${testsRun.length} isolated check(s) completed.${advisories.length ? ` ${advisories.join("; ")}.` : ""}`,
+        suggestedNextAction: failures.length ? "CODER" : undefined,
+      },
+      duration = Date.now() - started;
+    await db.agentRun.update({
+      where: { id: run.id },
+      data: {
+        status: "COMPLETED",
+        output: report as never,
+        toolCalls,
+        finishedAt: new Date(),
+        durationMs: duration,
+      },
+    });
+    return finish(taskId, run.id, "TESTER", "MANAGER", "TEST_REPORT", report, iteration);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await db.agentRun.update({
+      where: { id: run.id },
+      data: {
+        status: "FAILED",
+        error: detail,
+        toolCalls,
+        finishedAt: new Date(),
+        durationMs: Date.now() - started,
+      },
+    });
+    throw error;
+  }
+}
+export async function reviewer(
+  taskId: string,
+  issue: unknown,
+  reports: ResearchReport[],
+  diff: string,
+  tests: TestReport,
+  mcp: McpTools,
+  iteration: number,
+  inputArtifactIds: string[],
+): Promise<RoleResult<ReviewReport>> {
+  const result = await modelRole<ReviewReport>({
+    taskId,
+    role: "REVIEWER",
+    iteration,
+    objective: "Independently assess tested patch",
+    payload: reviewerContext(issue, reports, diff, tests),
+    mcp,
+    tools: [
+      "list_tree",
+      "search_code",
+      "read_file",
+      "read_range",
+      "get_diff",
+      "get_changed_files",
+      "get_status",
+      "get_history",
+    ],
+    schema: reviewContract,
+    inputArtifactIds,
+    system:
+      "You are BugPilot's independent Reviewer in a fresh context. Inspect issue requirements, actual diff, source, tests, and test evidence. You never receive Coder private context. You are read-only. Return ONLY JSON {decision:'approve'|'reject',findings:[{severity,title,evidence}],scopeAssessment:'minimal'|'acceptable'|'too-broad',regressionRisk:'low'|'medium'|'high',reasoning}. Reject any blocking finding.",
+  });
+  return finish(taskId, result.runId, "REVIEWER", "MANAGER", "REVIEW_REPORT", result.output, iteration);
+}
