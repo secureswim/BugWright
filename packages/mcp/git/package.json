@@ -1,0 +1,1 @@
+{"name":"@bugpilot/mcp-git","version":"0.1.0","private":true,"type":"module","scripts":{"build":"tsc -b","typecheck":"tsc -b --pretty false","start":"tsx src/server.ts"},"dependencies":{"@modelcontextprotocol/sdk":"^1.17.5","zod":"^3.25.76"}}

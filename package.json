@@ -1,0 +1,32 @@
+{
+  "name": "bugpilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/mcp/*"
+  ],
+  "scripts": {
+    "build": "npm run db:generate && npm run build --workspaces --if-present",
+    "dev": "concurrently -n api,worker,web -c cyan,magenta,green \"npm run dev -w @bugpilot/api\" \"npm run dev -w @bugpilot/worker\" \"npm run dev -w @bugpilot/web\"",
+    "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
+    "db:push": "prisma db push --schema packages/database/prisma/schema.prisma",
+    "test": "vitest run packages/policy/src/index.test.ts packages/agent/src/state-machine.test.ts packages/agent/src/parallel.test.ts packages/agent/src/context.test.ts apps/api/src/resume.test.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "compose:up": "docker compose up -d postgres",
+    "compose:down": "docker compose down",
+    "demo": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/run-demo.ts",
+    "smoke:mcp": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/smoke-mcp.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "concurrently": "^9.1.2",
+    "prisma": "^6.16.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

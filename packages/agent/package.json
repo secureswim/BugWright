@@ -1,0 +1,1 @@
+{"name":"@bugpilot/agent","version":"0.1.0","private":true,"type":"module","exports":"./src/index.ts","scripts":{"build":"tsc -b","typecheck":"tsc -b --pretty false"},"dependencies":{"@bugpilot/database":"*","@bugpilot/policy":"*","@modelcontextprotocol/sdk":"^1.17.5"}}

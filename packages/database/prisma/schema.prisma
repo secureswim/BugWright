@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskState {
+  QUEUED
+  PREPARING
+  RESEARCHING
+  PLANNING
+  CODING
+  TESTING
+  RE_RESEARCHING
+  RE_CODING
+  REVIEWING
+  REVISION_REQUESTED
+  AWAITING_HUMAN_APPROVAL
+  PUBLISHING
+  COMPLETED
+  NEEDS_ATTENTION
+  FAILED
+  REJECTED
+}
+
+model Task {
+  id              String       @id @default(cuid())
+  repositoryUrl   String
+  repositoryOwner String
+  repositoryName  String
+  issueNumber     Int
+  issueTitle      String?
+  issueBody       String?      @db.Text
+  baseBranch      String       @default("main")
+  baseCommit      String?
+  workspacePath   String?
+  state           TaskState    @default(QUEUED)
+  attempt         Int          @default(0)
+  maxAttempts     Int          @default(3)
+  revisionCycle   Int          @default(0)
+  maxRevisions    Int          @default(2)
+  maxAgentRuns    Int          @default(16)
+  maxModelCalls   Int          @default(40)
+  timeoutMs       Int          @default(900000)
+  delegationCycles Int         @default(0)
+  modelCalls      Int          @default(0)
+  currentAgent    String?
+  executionMode   String       @default("MULTI_AGENT")
+  demoMode        Boolean      @default(false)
+  plan            String?      @db.Text
+  managerPlan     Json?
+  researchReport  Json?
+  patchProposal   Json?
+  testReport      Json?
+  reviewReport    Json?
+  summary         String?      @db.Text
+  diff            String?      @db.Text
+  approvalHash    String?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  pullRequestUrl  String?
+  error           String?      @db.Text
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  events          TaskEvent[]
+  testRuns        TestRun[]
+  approvals       Approval[]
+  messages        AgentMessage[]
+  agentRuns       AgentRun[]
+
+  @@index([state, createdAt])
+}
+
+model TaskEvent {
+  id        BigInt   @id @default(autoincrement())
+  taskId    String
+  type      String
+  title     String
+  detail    String?  @db.Text
+  tool      String?
+  agentRole String?
+  status    String?
+  durationMs Int?
+  iteration Int      @default(0)
+  input     Json?
+  output    Json?
+  createdAt DateTime @default(now())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, id])
+}
+
+model AgentMessage {
+  id        String   @id @default(cuid())
+  taskId    String
+  fromRole  String
+  toRole    String
+  type      String
+  payload   Json
+  iteration Int      @default(0)
+  createdAt DateTime @default(now())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  @@index([taskId, createdAt])
+}
+
+model AgentRun {
+  id          String   @id @default(cuid())
+  taskId      String
+  role        String
+  objective   String?
+  parentRunId String?
+  status      String
+  iteration   Int      @default(0)
+  input       Json?
+  output      Json?
+  modelCalls  Int      @default(0)
+  model       String?
+  toolCalls   Int      @default(0)
+  toolsUsed   Json?
+  inputArtifactIds String[] @default([])
+  outputArtifactId String?
+  error       String?  @db.Text
+  contextChars Int     @default(0)
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  durationMs  Int?
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  @@index([taskId, startedAt])
+}
+
+model TestRun {
+  id         String   @id @default(cuid())
+  taskId     String
+  command    String
+  exitCode   Int
+  stdout     String   @db.Text
+  stderr     String   @db.Text
+  durationMs Int
+  createdAt  DateTime @default(now())
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Approval {
+  id        String   @id @default(cuid())
+  taskId    String
+  hash      String
+  decision  String
+  note      String?
+  createdAt DateTime @default(now())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
