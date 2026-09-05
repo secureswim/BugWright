@@ -10,6 +10,7 @@ import {
   notConfigured,
 } from "./types.js";
 import { fileExists, findProjectDirectories, readIfPresent } from "./walk.js";
+import { detectTestConventions } from "./conventions.js";
 import { scopeToProject } from "./node.js";
 
 type PythonManager = "uv" | "poetry" | "pip";
@@ -77,6 +78,7 @@ export class PythonAdapter implements LanguageAdapter {
           lint: /\[tool\.ruff\]|\[flake8\]|\[tool\.flake8\]/.test(config),
         },
         evidence: pyproject ? `pyproject.toml managed by ${manager}` : "requirements.txt / setup.py",
+        testConventions: await detectTestConventions(root, projectPath),
       });
     }
     return projects;

@@ -68,6 +68,12 @@ export interface DetectedProject {
   };
   /** Human-readable evidence of how the project was identified. */
   evidence: string;
+  /**
+   * How this project's tests are actually written, read from its config and
+   * existing test files. Given to the Reproducer so the location and extension
+   * of a new test are read from the repository rather than guessed.
+   */
+  testConventions?: import("./conventions.js").TestConventions;
 }
 
 /** A named cache volume mounted into the container for a project. */

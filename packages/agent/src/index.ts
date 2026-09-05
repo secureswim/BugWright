@@ -330,7 +330,21 @@ export async function runTask(taskId: string) {
         return { failed: result.exitCode !== 0, output, ran: true };
       };
 
-      const produced = await reproducer(taskId, issue, reports, mcp, 0, researchArtifacts, verify);
+      // Read the project's test layout before writing anything, so the
+      // Reproducer is told where tests live rather than guessing.
+      const detected = parseToolJson<{ status: string; project?: { testConventions?: unknown } }>(
+        await mcp.call("TESTER", "runner", "select_project", { changedFiles: [] }, 0),
+      );
+      const produced = await reproducer(
+        taskId,
+        issue,
+        reports,
+        mcp,
+        0,
+        researchArtifacts,
+        verify,
+        detected.project?.testConventions,
+      );
       reproduction = produced.report;
       researchArtifacts.push(produced.artifactId);
       await db.task.update({

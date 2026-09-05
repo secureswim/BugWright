@@ -12,6 +12,7 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "@bugpilot/adapters": "*",
     "@bugpilot/policy": "*",
     "@modelcontextprotocol/sdk": "^1.17.5",
     "zod": "^3.25.76"

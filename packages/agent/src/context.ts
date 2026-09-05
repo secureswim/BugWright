@@ -23,9 +23,15 @@ export const researchContext = (issue: unknown, task: ResearchTask) => ({
   researchTask: task,
 });
 
-export const reproducerContext = (issue: unknown, reports: ResearchReport[]) => ({
+export const reproducerContext = (
+  issue: unknown,
+  reports: ResearchReport[],
+  /** Read from the project's test config and existing tests, not guessed. */
+  testConventions?: unknown,
+) => ({
   issue,
   researchReports: reports,
+  testConventions: testConventions ?? null,
   constraints: {
     writeTestsOnly: true,
     mustFailBeforeFix: true,

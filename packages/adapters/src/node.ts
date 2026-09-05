@@ -11,6 +11,7 @@ import {
   workdirFor,
 } from "./types.js";
 import { fileExists, findProjectDirectories, readIfPresent } from "./walk.js";
+import { detectTestConventions } from "./conventions.js";
 
 type PackageManager = "npm" | "pnpm" | "yarn";
 
@@ -71,6 +72,7 @@ export class NodeAdapter implements LanguageAdapter {
           lint: Boolean(scripts.lint),
         },
         evidence: `package.json with ${packageManager}${hasLockfile ? " and a lockfile" : " and no lockfile"}`,
+        testConventions: await detectTestConventions(root, projectPath),
       });
     }
     return projects;

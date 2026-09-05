@@ -547,13 +547,14 @@ export async function reproducer(
   iteration: number,
   inputArtifactIds: string[],
   verify: (testPath: string) => Promise<{ failed: boolean; output: string; ran: boolean }>,
+  testConventions?: unknown,
 ): Promise<RoleResult<ReproductionReport>> {
   const result = await modelRole<ReproductionReport>({
     taskId,
     role: "REPRODUCER",
     iteration,
     objective: "Write a test that fails because of the reported bug",
-    payload: reproducerContext(issue, reports),
+    payload: reproducerContext(issue, reports, testConventions),
     mcp,
     tools: [...READ_TOOLS, "write_test_file"],
     schema: reproductionContract,

@@ -7,6 +7,12 @@ export { NodeAdapter, scopeToProject } from "./node.js";
 export { PythonAdapter } from "./python.js";
 export { findProjectDirectories } from "./walk.js";
 export {
+  detectTestConventions,
+  containsJsx,
+  validateTestExtension,
+  type TestConventions,
+} from "./conventions.js";
+export {
   detectNoTestsCollected,
   detectTransformError,
   implicatesAnyFile,

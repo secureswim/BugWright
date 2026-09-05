@@ -12,6 +12,7 @@ import {
   resolveInside,
   toolGate,
 } from "@bugpilot/policy";
+import { validateTestExtension } from "@bugpilot/adapters";
 
 const root = path.resolve(process.env.BUGPILOT_REPO_ROOT ?? "");
 if (!process.env.BUGPILOT_REPO_ROOT) throw new Error("BUGPILOT_REPO_ROOT is required");
@@ -223,6 +224,13 @@ if (allowed("write_test_file")) {
       // Enforced here as well as in the client: the Reproducer's authority is
       // to write tests, and nothing about a model's output can widen it.
       const safe = assertTestPath(requested);
+      // A .ts file containing JSX cannot be parsed by any of the toolchains
+      // that would run it, and it fails identically before and after a patch -
+      // indistinguishable from a bug that will not go away. Rejecting it here
+      // returns the reason to the model, which corrects itself in the same turn
+      // instead of burning a whole run.
+      const extensionProblem = validateTestExtension(safe, content);
+      if (extensionProblem) throw new Error(extensionProblem);
       const absolute = resolveInside(root, safe);
       await mkdir(path.dirname(absolute), { recursive: true });
       await writeFile(absolute, content, "utf8");
