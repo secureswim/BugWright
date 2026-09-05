@@ -9,6 +9,15 @@ can fix a bug — it is the boundaries around it: no patch is accepted until a
 test that **failed before it** passes after it, no agent can execute code it
 wrote, and a human approves a cryptographic fingerprint rather than a summary.
 
+## Demo
+
+[![Watch BugWright take a GitHub issue to a tested patch](https://img.youtube.com/vi/lwb5g1JTKYM/maxresdefault.jpg)](https://www.youtube.com/watch?v=lwb5g1JTKYM)
+
+A full run: the issue comes in, the Researcher diagnoses it, the Reproducer
+writes a test that fails, the Coder patches, the Tester proves the test now
+passes, and an independent Reviewer signs off before a human authorizes the
+pull request. Click to play on YouTube.
+
 ```mermaid
 flowchart TD
   U[GitHub issue] --> M[Manager]
