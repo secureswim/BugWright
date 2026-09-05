@@ -697,5 +697,7 @@ export async function runTask(taskId: string) {
 
 export { McpTools } from "./mcp.js";
 export { RoleModel, GeminiModel, type AgentModel } from "./model.js";
+export { resolveProvider, reviewerIsIndependent, parseSpec, type ModelRole } from "./model/registry.js";
+export { FakeProvider, ReplayProvider, RecordingProvider } from "./model/index.js";
 export { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
 export { attemptHistory };
