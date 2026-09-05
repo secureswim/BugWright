@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -78,12 +78,47 @@ type Task = {
   events?: Event[];
   testRuns?: TestRun[];
   agentRuns?: AgentRun[];
-  managerPlan?: any;
-  researchReport?: any;
-  reproductionReport?: any;
-  patchProposal?: any;
-  testReport?: any;
-  reviewReport?: any;
+  managerPlan?: ManagerPlan;
+  researchReport?: ResearchReport;
+  reproductionReport?: ReproductionReport;
+  patchProposal?: PatchProposal;
+  testReport?: TestReport;
+  reviewReport?: ReviewReport;
+};
+
+/**
+ * The reports each role hands back, as the review UI reads them.
+ *
+ * These arrive as JSON columns, so every field is optional: an in-flight task
+ * has half of them missing, and an older row may predate a field entirely.
+ * They deliberately describe only what this page renders rather than mirroring
+ * the agent's full schema - the API is the source of truth for that, and a
+ * duplicate that drifts is worse than a narrow one that does not.
+ */
+type ManagerPlan = { summary?: string; steps?: string[] };
+type ResearchReport = {
+  diagnosis?: string;
+  proposedApproach?: string;
+  evidence?: { path: string; line?: number; observation: string }[];
+};
+type ReproductionReport = {
+  reproduced?: boolean;
+  explanation?: string;
+  blockedReason?: string;
+  testPath?: string;
+};
+type PatchProposal = { rationale?: string; filesChanged?: string[] };
+type TestReport = {
+  passed?: boolean;
+  summary?: string;
+  notConfigured?: string[];
+  reproductionFixed?: "passed" | "failed" | "not-run";
+};
+type ReviewReport = {
+  reasoning?: string;
+  decision?: string;
+  scopeAssessment?: string;
+  regressionRisk?: string;
 };
 type Health = {
   ok: boolean;
@@ -97,7 +132,12 @@ type Health = {
     replaying: boolean;
   };
 };
-const terminal = new Set(["COMPLETED", "FAILED", "REJECTED", "AWAITING_APPROVAL"]);
+// States a run does not leave on its own. "AWAITING_APPROVAL" was in this set
+// and is not a TaskState the API ever emits - the real name is
+// AWAITING_HUMAN_APPROVAL - and NEEDS_ATTENTION was missing, so both of the
+// states that actually wait on a human were the ones that kept polling.
+// Kept in step with TaskState in packages/database/prisma/schema.prisma.
+const terminal = new Set(["COMPLETED", "FAILED", "REJECTED", "NEEDS_ATTENTION", "AWAITING_HUMAN_APPROVAL"]);
 const stages = [
   "PREPARING",
   "RESEARCHING",
@@ -428,11 +468,18 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
     const r = await fetch(`${API}/tasks/${id}`, { cache: "no-store" });
     if (r.ok) setTask(await r.json());
   }, [id]);
+  // Poll only while the run can still change. `terminal` was declared for this
+  // and never wired up, so a finished task kept re-fetching every 1.5s for as
+  // long as the tab stayed open - visible as an endless column of GET /tasks/:id
+  // in the API log. `load` resolves the status, so approving or resuming a task
+  // re-runs this effect and polling picks back up.
+  const settled = task ? terminal.has(task.state) : false;
   useEffect(() => {
     load();
+    if (settled) return;
     const timer = setInterval(load, 1500);
     return () => clearInterval(timer);
-  }, [load]);
+  }, [load, settled]);
   async function decide(decision: string) {
     setBusy(true);
     setActionError("");
@@ -676,7 +723,7 @@ function ReviewBrief({ task }: { task: Task }) {
       </Brief>
       <Brief title="2. Research diagnosis">
         <p>{research?.diagnosis ?? "Pending"}</p>
-        {research?.evidence?.map((e: any, i: number) => (
+        {research?.evidence?.map((e, i) => (
           <code key={i}>
             {e.path}
             {e.line ? `:${e.line}` : ""} · {e.observation}
@@ -768,7 +815,7 @@ function DiffView({ diff }: { diff?: string }) {
     </div>
   );
 }
-function Tests({ runs, report }: { runs: TestRun[]; report?: { passed?: boolean } }) {
+function Tests({ runs, report }: { runs: TestRun[]; report?: TestReport }) {
   if (!runs.length) return <div className="empty compact">No checks recorded yet.</div>;
   return (
     <div className="testList">
