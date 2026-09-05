@@ -663,6 +663,8 @@ export async function coder(
 type RunnerResult = {
   status: "ran" | "not_configured" | "unsupported";
   reason?: string;
+  /** The runner started but found nothing to execute, despite a non-zero exit. */
+  noTestsCollected?: boolean;
   command?: string;
   exitCode?: number;
   stdout?: string;
@@ -826,8 +828,20 @@ export async function tester(
     if (reproductionTestPath) {
       const result = await call<RunnerResult>("run_test", { projectPath, only: reproductionTestPath });
       await record(result);
-      reproductionFixed = statusOf(result);
-      if (result.status === "ran") {
+      if (result.status !== "ran") {
+        notConfigured.push(`reproduction: ${result.reason}`);
+      } else if (result.noTestsCollected) {
+        // Not a verdict about the patch. Sending the Coder to revise on this
+        // would be chasing a runner problem with source changes.
+        reproductionFixed = "not-run";
+        failures.push({
+          command: result.command ?? "",
+          message: `The reproduction test ${reproductionTestPath} could not be collected by the test runner`,
+          relevantOutput: (result.stderr || result.stdout || "").slice(-4000),
+          category: "infrastructure",
+        });
+      } else {
+        reproductionFixed = statusOf(result);
         testsRun.push(`${result.command} (reproduction)`);
         if (result.exitCode !== 0) {
           failures.push({
@@ -837,8 +851,6 @@ export async function tester(
             category: "code",
           });
         }
-      } else {
-        notConfigured.push(`reproduction: ${result.reason}`);
       }
     }
 
@@ -898,6 +910,7 @@ export async function tester(
     }
 
     const passed = failures.length === 0;
+    const infrastructure = failures.some((failure) => failure.category === "infrastructure");
     const summaryParts = [
       reproductionTestPath
         ? reproductionFixed === "passed"
@@ -923,7 +936,7 @@ export async function tester(
       failures,
       notConfigured,
       summary: `${summaryParts.join("; ")}.${notConfigured.length ? ` Skipped: ${notConfigured.join(", ")}.` : ""}`,
-      suggestedNextAction: passed ? undefined : "CODER",
+      suggestedNextAction: passed ? undefined : infrastructure ? "NEEDS_ATTENTION" : "CODER",
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

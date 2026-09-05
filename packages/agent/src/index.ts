@@ -309,15 +309,22 @@ export async function runTask(taskId: string) {
           exitCode?: number;
           stdout?: string;
           stderr?: string;
+          noTestsCollected?: boolean;
         }>(await mcp!.call("TESTER", "runner", "run_test", { projectPath, only: testPath }, 0));
         if (result.status !== "ran") {
           return { failed: false, output: "The reproduction test could not be executed", ran: false };
         }
-        return {
-          failed: result.exitCode !== 0,
-          output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
-          ran: true,
-        };
+        const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+        // A runner that collected no tests also exits non-zero. Treating that
+        // as a failing test would record a reproduction that never ran.
+        if (result.noTestsCollected) {
+          return {
+            failed: false,
+            output: `The test runner collected no tests for ${testPath}.\n${output}`,
+            ran: false,
+          };
+        }
+        return { failed: result.exitCode !== 0, output, ran: true };
       };
 
       const produced = await reproducer(taskId, issue, reports, mcp, 0, researchArtifacts, verify);
@@ -690,7 +697,5 @@ export async function runTask(taskId: string) {
 
 export { McpTools } from "./mcp.js";
 export { RoleModel, GeminiModel, type AgentModel } from "./model.js";
-export { resolveProvider, reviewerIsIndependent, parseSpec, type ModelRole } from "./model/registry.js";
-export { FakeProvider, ReplayProvider, RecordingProvider } from "./model/index.js";
 export { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
 export { attemptHistory };

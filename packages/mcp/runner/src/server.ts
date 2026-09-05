@@ -9,7 +9,9 @@ import {
   DetectedProject,
   Operation,
   adapterFor,
+  detectNoTestsCollected,
   detectProjects,
+  relativeToProject,
   selectProject,
 } from "@bugpilot/adapters";
 
@@ -102,12 +104,23 @@ async function resolveProject(projectPath: string): Promise<DetectedProject> {
  * successful result rather than a non-zero exit the Tester would misread as a
  * genuine failure.
  */
-async function execute(operation: Operation, project: DetectedProject, readOnly = true) {
+async function execute(
+  operation: Operation,
+  project: DetectedProject,
+  readOnly = true,
+  extra: Record<string, unknown> = {},
+) {
   if (!operation.configured) {
     return text({ status: "not_configured", reason: operation.reason, projectPath: project.projectPath });
   }
   const result = await run(project, operation.command, readOnly);
-  return text({ status: "ran", projectPath: project.projectPath, ...result });
+  // A runner that collected nothing also exits non-zero. Reporting that
+  // separately is what keeps "no test ran" from being read as "the test
+  // failed" - which, before a patch, would look like a successful
+  // reproduction of a bug that was never executed.
+  const noTestsCollected =
+    result.exitCode !== 0 && detectNoTestsCollected(`${result.stdout}\n${result.stderr}`);
+  return text({ status: "ran", projectPath: project.projectPath, noTestsCollected, ...extra, ...result });
 }
 
 const projectInput = { projectPath: z.string().default(".") };
@@ -157,7 +170,14 @@ server.tool(
   { ...projectInput, only: z.string().max(400).optional() },
   async ({ projectPath, only }) => {
     const project = await resolveProject(projectPath);
-    return execute(adapterFor(project.adapter).test(project, { only }), project);
+    // Callers speak repository-relative paths; the command runs with the
+    // working directory set to the project, so the path must be rewritten or
+    // the runner silently collects nothing.
+    const scoped = only ? relativeToProject(project.projectPath, only) : undefined;
+    return execute(adapterFor(project.adapter).test(project, { only: scoped }), project, true, {
+      requestedOnly: only,
+      resolvedOnly: scoped,
+    });
   },
 );
 
