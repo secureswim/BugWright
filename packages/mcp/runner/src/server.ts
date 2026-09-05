@@ -4,6 +4,7 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { buildRunArgs } from "./sandbox.js";
 import {
   CommandSpec,
   DetectedProject,
@@ -89,34 +90,7 @@ async function run(project: DetectedProject, command: CommandSpec, readOnly: boo
     await prepareVolume(adapter.image, mount.volume, mount.containerPath);
   }
 
-  const args = [
-    "run",
-    "--rm",
-    "--network",
-    command.network,
-    "--cpus",
-    "2",
-    "--memory",
-    "2g",
-    "--pids-limit",
-    "256",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    // The repository is mounted read-only and a writable overlay is layered on
-    // top for anything the toolchain needs to create. A hostile test suite in
-    // an untrusted repository therefore cannot rewrite the source under review,
-    // or the .git directory the diff is computed from.
-    "-v",
-    `${root}:/workspace${readOnly ? ":ro" : ""}`,
-    ...(readOnly ? ["--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"] : []),
-    ...mounts.flatMap((mount) => ["-v", `${mount.volume}:${mount.containerPath}`]),
-    "-w",
-    workdir,
-    adapter.image,
-    ...command.argv,
-  ];
+  const args = buildRunArgs({ image: adapter.image, root, workdir, command, mounts, readOnly });
 
   const started = Date.now();
   return await new Promise<{

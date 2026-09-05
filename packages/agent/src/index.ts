@@ -499,6 +499,14 @@ export async function runTask(taskId: string) {
         }
 
         testAttempts++;
+        // The workspace is writable during test runs, because a read-only
+        // mount breaks any project whose test config is TypeScript. The
+        // property that mattered is preserved by checking it instead: if the
+        // repository's own test suite modified the tree, the diff a human
+        // would approve is not the diff that was tested.
+        const diffBeforeTests = parseToolJson<{ stdout: string }>(
+          await mcp.call("CODER", "git", "get_diff", {}, revision),
+        ).stdout;
         const tested = await tester(
           taskId,
           issue,
@@ -515,6 +523,28 @@ export async function runTask(taskId: string) {
           where: { id: taskId },
           data: { testReport: testReport as never, attempt: testAttempts },
         });
+
+        const diffAfterTests = parseToolJson<{ stdout: string }>(
+          await mcp.call("CODER", "git", "get_diff", {}, revision),
+        ).stdout;
+        if (diffAfterTests !== diffBeforeTests) {
+          await event(
+            taskId,
+            "WORKSPACE_TAMPERED",
+            "The test run modified the workspace",
+            "Running the repository's tests changed tracked files, so the tested tree is not the " +
+              "reviewed tree. Stopping rather than asking a human to approve a diff that was never tested.",
+            revision,
+          );
+          await state(
+            taskId,
+            "NEEDS_ATTENTION",
+            "The repository's test suite modified the working tree during verification",
+            revision,
+          );
+          return;
+        }
+        diff = diffAfterTests;
       }
 
       /* ---- routing after tests ---- */

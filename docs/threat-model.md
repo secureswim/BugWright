@@ -106,10 +106,25 @@ the human approves is not the diff that was tested.
 
 **Controls.** Tests run in a container as UID 10001 with `--cap-drop ALL`,
 `--security-opt no-new-privileges`, `--network none`, 2 CPUs, 2 GB of memory, a
-256-process limit, and a five-minute timeout. The workspace is mounted
-**read-only** with a tmpfs overlay for scratch, so a test cannot rewrite the
-source or `.git`. Only dependency installation gets network access, and it runs
-with lifecycle scripts disabled (`--ignore-scripts`).
+256-process limit, and a five-minute timeout. `.git` is always mounted
+**read-only**, so nothing the repository runs can rewrite the history the
+approved diff is computed from. Only dependency installation gets network
+access, and it runs with lifecycle scripts disabled (`--ignore-scripts`).
+
+The *workspace* is writable, and that is a deliberate reversal. It was mounted
+read-only until that turned out to break most real JavaScript projects: Vite
+bundles a TypeScript config to a temp file beside it before importing, so
+`vitest.config.ts` made vitest die at startup with EACCES. A control that
+prevents the product from working on its target repositories is not a control.
+
+What the read-only mount was protecting against - a hostile test suite
+rewriting the source so the approved diff is not the tested diff - is now
+**detected** rather than prevented: the orchestrator captures the diff before
+and after each test run and stops with `WORKSPACE_TAMPERED` if the tree
+changed. That is weaker in one way (the write happens before it is caught) and
+stronger in another (it catches mutation by any route, not only direct writes
+to the mount). `BUGPILOT_RUNNER_READONLY=1` restores the strict mount for
+repositories that tolerate it.
 
 **Residual risk.** Container escape. Docker is a boundary, not a sandbox in the
 gVisor sense. Do not point BugPilot at a repository you would not clone.
