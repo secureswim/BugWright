@@ -562,8 +562,13 @@ export async function reproducer(
     inputArtifactIds,
     system:
       "You are BugPilot's Reproducer. Write ONE minimal test that fails because of the reported bug, " +
-      "using write_test_file. Match the repository's existing test framework and conventions - read a " +
-      "neighbouring test first. You may only create test files: you cannot edit source, and you cannot " +
+      "using write_test_file. testConventions in your input was read from this project's test config " +
+      "and its existing tests: put the file in one of its directories, use one of its extensions, and " +
+      "open one of its examples first to copy the imports and setup. Import the code under test through " +
+      "testConventions.importAliases when one applies - do not hand-count '../' segments, which is how " +
+      "these tests usually fail to resolve. Paths you pass to write_test_file are relative to the " +
+      "REPOSITORY root while testConventions is relative to the project, so prefix it with the project " +
+      "directory. You may only create test files: you cannot edit source, and you cannot " +
       "run anything. Assert the CORRECT behaviour so the test fails today and passes once the bug is fixed. " +
       "Do not modify or weaken any existing test. " +
       "Return ONLY JSON {reproduced,testPath,explanation,blockedReason?,confidence}. " +
@@ -578,10 +583,19 @@ export async function reproducer(
     // The model's claim is not evidence. Run the test and believe the exit code.
     const verification = await verify(proposed.testPath);
     if (!verification.ran) {
+      // Report why, not just that. The verifier already knows whether the file
+      // was missed, failed to parse, or hit an unrunnable project, and throwing
+      // that away leaves a run that stopped for a knowable reason looking like
+      // an unexplained one.
       report = {
         ...proposed,
         reproduced: false,
-        blockedReason: "The reproduction test could not be executed, so the bug was never observed to fail.",
+        blockedReason:
+          `The reproduction test never ran, so the bug was never observed to fail. ${verification.output}`.slice(
+            0,
+            4000,
+          ),
+        failureOutput: verification.output.slice(-4000),
       };
     } else if (!verification.failed) {
       report = {

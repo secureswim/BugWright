@@ -22,6 +22,15 @@ export interface TestConventions {
   extensions: string[];
   /** A few existing test files to imitate, project-relative. */
   examples: string[];
+  /**
+   * Module path aliases the project resolves, e.g. `{"@": "./src"}`.
+   *
+   * Without these a model writes a relative import by counting directories and
+   * gets it wrong - `../src/pages/Login` from `src/test/` resolves to
+   * `src/src/pages/Login`, which fails to resolve and looks like a bug that
+   * cannot be reproduced.
+   */
+  importAliases: Record<string, string>;
 }
 
 const TEST_FILE = /(?:\.|_)(?:test|spec)\.[cm]?[jt]sx?$|^test_[^/]*\.py$|_test\.py$|\.(?:test|spec)\.py$/i;
@@ -41,6 +50,63 @@ const CONFIG_FILES = [
   "tox.ini",
   "pytest.ini",
 ];
+
+/** Files that may declare module path aliases. */
+const ALIAS_FILES = [
+  "tsconfig.json",
+  "tsconfig.app.json",
+  "tsconfig.base.json",
+  "jsconfig.json",
+  "vite.config.ts",
+  "vite.config.js",
+  "vitest.config.ts",
+  "jest.config.ts",
+  "jest.config.js",
+  "package.json",
+];
+
+/**
+ * Extracts module path aliases from TypeScript `paths`, bundler `alias` maps
+ * and Jest's `moduleNameMapper`.
+ *
+ * Deliberately regex-based: these files are TypeScript modules as often as they
+ * are JSON, and evaluating them to read a config would mean executing the
+ * repository under test.
+ */
+export function parseImportAliases(source: string): Record<string, string> {
+  const aliases: Record<string, string> = {};
+
+  // tsconfig "paths": { "@/*": ["./src/*"] }
+  const paths = /"paths"\s*:\s*\{([^}]*)\}/s.exec(source);
+  if (paths) {
+    for (const entry of paths[1].matchAll(/["']([^"']+)["']\s*:\s*\[\s*["']([^"']+)["']/g)) {
+      aliases[entry[1].replace(/\/\*$/, "")] = entry[2].replace(/\/\*$/, "");
+    }
+  }
+
+  // vite/vitest: alias: { "@": path.resolve(__dirname, "./src") }
+  const alias = /alias\s*:\s*\{([^}]*)\}/s.exec(source);
+  if (alias) {
+    // `[^}]*?` rather than `[^,}]*?`: the value is often a call such as
+    // `path.resolve(__dirname, "./src")`, whose own comma would otherwise end
+    // the match before the path is reached.
+    for (const entry of alias[1].matchAll(/["']([^"']+)["']\s*:\s*[^}]*?["']([^"']+)["']/g)) {
+      aliases[entry[1]] = entry[2];
+    }
+  }
+
+  // jest moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" }
+  const mapper = /moduleNameMapper\s*:\s*\{([^}]*)\}/s.exec(source);
+  if (mapper) {
+    for (const entry of mapper[1].matchAll(
+      /["']\^?([^"'$()\\]+?)\/?\(?\.?\*?\)?\$?["']\s*:\s*["']([^"']+)["']/g,
+    )) {
+      aliases[entry[1]] = entry[2].replace("<rootDir>", ".").replace(/\/\$1$/, "");
+    }
+  }
+
+  return aliases;
+}
 
 /** Pulls `include: [...]` / `testMatch: [...]` string literals out of a config. */
 function parseIncludeGlobs(source: string): string[] {
@@ -122,6 +188,12 @@ export async function detectTestConventions(root: string, projectPath: string): 
   }
   await walk(projectRoot, 0);
 
+  let aliasText = configText;
+  for (const file of ALIAS_FILES) {
+    const content = await readIfPresent(projectRoot, file);
+    if (content) aliasText += `\n${content}`;
+  }
+
   const extensions = byFrequency(found.map((file) => path.extname(file)));
   const directories = byFrequency(found.map((file) => path.dirname(file)));
 
@@ -131,6 +203,7 @@ export async function detectTestConventions(root: string, projectPath: string): 
     directories: directories.slice(0, 4),
     extensions,
     examples: found.slice(0, 3),
+    importAliases: parseImportAliases(aliasText),
   };
 }
 

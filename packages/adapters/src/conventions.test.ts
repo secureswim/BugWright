@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { containsJsx, detectTestConventions, validateTestExtension } from "./conventions.js";
+import {
+  containsJsx,
+  detectTestConventions,
+  parseImportAliases,
+  validateTestExtension,
+} from "./conventions.js";
 
 async function scaffold(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "bugpilot-conventions-"));
@@ -121,5 +126,43 @@ describe("validateTestExtension", () => {
 
   it("accepts a python test", () => {
     expect(validateTestExtension("tests/test_x.py", "assert add(1, 2) == 3")).toBeUndefined();
+  });
+});
+
+/**
+ * A model that has to work out `../../pages/Login` by counting directories gets
+ * it wrong, and the resulting unresolved import looks exactly like a bug that
+ * cannot be reproduced. The project already declares the answer.
+ */
+describe("parseImportAliases", () => {
+  it("reads a vite resolve alias", () => {
+    const source = `resolve: { alias: { "@": path.resolve(__dirname, "./src") } }`;
+    expect(parseImportAliases(source)).toEqual({ "@": "./src" });
+  });
+
+  it("reads tsconfig paths and strips the glob", () => {
+    const source = `{ "compilerOptions": { "paths": { "@/*": ["./src/*"], "~lib/*": ["./lib/*"] } } }`;
+    expect(parseImportAliases(source)).toEqual({ "@": "./src", "~lib": "./lib" });
+  });
+
+  it("reads a jest moduleNameMapper", () => {
+    const source = `moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" }`;
+    expect(parseImportAliases(source)["@"]).toBe("./src");
+  });
+
+  it("returns nothing for a project with no aliases", () => {
+    expect(parseImportAliases(`export default { test: { globals: true } }`)).toEqual({});
+  });
+});
+
+describe("detectTestConventions aliases", () => {
+  it("surfaces the alias a vite project resolves", async () => {
+    const root = await scaffold({
+      "frontend/package.json": JSON.stringify({ scripts: { test: "vitest run" } }),
+      "frontend/vitest.config.ts": `export default { resolve: { alias: { "@": path.resolve(__dirname, "./src") } } }`,
+      "frontend/src/test/a.test.tsx": "",
+    });
+    const conventions = await detectTestConventions(root, "frontend");
+    expect(conventions.importAliases).toEqual({ "@": "./src" });
   });
 });

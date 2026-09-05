@@ -10,6 +10,7 @@ export {
   detectTestConventions,
   containsJsx,
   validateTestExtension,
+  parseImportAliases,
   type TestConventions,
 } from "./conventions.js";
 export {
