@@ -5,7 +5,7 @@ import {
   ReviewReport,
   ScopeVerdict,
   TestReport,
-} from "@bugpilot/shared";
+} from "@bugwright/shared";
 import {
   routeAfterReproduction,
   routeAfterReview,

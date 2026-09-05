@@ -1,9 +1,9 @@
-# BugPilot
+# BugWright
 
 **Six agents, separated by authority. The one that writes the patch cannot run
 it, review it, or ship it.**
 
-BugPilot turns a GitHub issue into a tested patch and, after human
+BugWright turns a GitHub issue into a tested patch and, after human
 authorization, a draft pull request. The interesting part is not that a model
 can fix a bug — it is the boundaries around it: no patch is accepted until a
 test that **failed before it** passes after it, no agent can execute code it
@@ -35,7 +35,7 @@ prompts. The failure mode is not that the model is bad at coding — it is that
 the same context investigates, changes, verifies, and approves its own work,
 and it is a poor judge of all four.
 
-BugPilot splits on **authority**, and enforces the split in code:
+BugWright splits on **authority**, and enforces the split in code:
 
 | Role | Input | Output | Capabilities |
 | --- | --- | --- | --- |
@@ -64,7 +64,7 @@ suite passes before a patch and passes after it — a green test run means only
 **"nothing else broke."** It says nothing about whether the reported bug was
 fixed.
 
-BugPilot therefore writes a failing test first, and verifies that it actually
+BugWright therefore writes a failing test first, and verifies that it actually
 fails:
 
 - The Reproducer proposes a test but **cannot execute anything**. The
@@ -92,7 +92,7 @@ See [ADR 6](docs/decisions/0006-reproduce-before-fixing.md).
 | **History** | Shallow clone, so `get_history` sees limited history. |
 
 A repository in an unsupported language is reported as such rather than
-silently failing: BugPilot will read and patch it but refuses to claim it
+silently failing: BugWright will read and patch it but refuses to claim it
 verified anything.
 
 Adding a language is one `LanguageAdapter` and one container image — see
@@ -103,10 +103,10 @@ Adding a language is one `LanguageAdapter` and one container image — see
 Any of Gemini, Anthropic, or OpenAI, configured per role:
 
 ```bash
-BUGPILOT_MODEL=gemini                                   # default for every role
-BUGPILOT_MODEL_RESEARCHER=gemini:gemini-3.5-flash-lite  # cheap, three run in parallel
-BUGPILOT_MODEL_CODER=gemini:gemini-3.5-pro
-BUGPILOT_MODEL_REVIEWER=anthropic:claude-sonnet-4-20250514
+BUGWRIGHT_MODEL=gemini                                   # default for every role
+BUGWRIGHT_MODEL_RESEARCHER=gemini:gemini-3.5-flash-lite  # cheap, three run in parallel
+BUGWRIGHT_MODEL_CODER=gemini:gemini-3.5-pro
+BUGWRIGHT_MODEL_REVIEWER=anthropic:claude-sonnet-4-20250514
 ```
 
 That last line is not only about quality. Two instances of the same model share
@@ -135,8 +135,8 @@ cp .env.example .env          # add one model API key
 npm install
 npm run db:generate
 docker compose up -d postgres
-docker build -t bugpilot-runner-node:latest   -f docker/runner.node.Dockerfile   .
-docker build -t bugpilot-runner-python:latest -f docker/runner.python.Dockerfile .
+docker build -t bugwright-runner-node:latest   -f docker/runner.node.Dockerfile   .
+docker build -t bugwright-runner-python:latest -f docker/runner.python.Dockerfile .
 npm run db:push
 npm run dev
 ```
@@ -152,8 +152,8 @@ test draft-PR publishing.
 Copy-Item .env.example .env
 npm install; npm run db:generate
 docker compose up -d postgres
-docker build -t bugpilot-runner-node:latest -f docker/runner.node.Dockerfile .
-docker build -t bugpilot-runner-python:latest -f docker/runner.python.Dockerfile .
+docker build -t bugwright-runner-node:latest -f docker/runner.node.Dockerfile .
+docker build -t bugwright-runner-python:latest -f docker/runner.python.Dockerfile .
 npm run db:push; npm run dev
 ```
 
@@ -166,7 +166,7 @@ npm run format:check
 npm run lint
 npm run typecheck
 npm test                      # 157 tests, no API key needed
-npm run build -w @bugpilot/web
+npm run build -w @bugwright/web
 ```
 
 The suite runs offline. `FakeProvider` scripts model turns for unit tests, and
@@ -174,8 +174,8 @@ The suite runs offline. `FakeProvider` scripts model turns for unit tests, and
 exercised in CI with no key and no network:
 
 ```bash
-BUGPILOT_RECORD=1 npm run demo    # capture once
-BUGPILOT_REPLAY=1 npm test        # replay forever, free
+BUGWRIGHT_RECORD=1 npm run demo    # capture once
+BUGWRIGHT_REPLAY=1 npm test        # replay forever, free
 ```
 
 ## Safety
@@ -184,7 +184,7 @@ BUGPILOT_REPLAY=1 npm test        # replay forever, free
   tools. No role has any GitHub tool; publishing is ordinary backend code
   behind the human gate.
 - **Credentials are scoped per server.** The repository and runner servers
-  receive `BUGPILOT_REPO_ROOT` and nothing else — not the model key, not the
+  receive `BUGWRIGHT_REPO_ROOT` and nothing else — not the model key, not the
   GitHub token, not `DATABASE_URL`.
 - **The state machine overrides the model.** A reviewer rejection can never
   become an approval, from any state, for any model suggestion. Tested
@@ -216,7 +216,7 @@ for an end-to-end attempt with its expected outcome recorded in the fixture.
 
 Every run, message, report, tool call, state change, and piece of evidence is
 persisted. The worker requeues interrupted non-terminal tasks on restart, and a
-stopped task offers **Resume from checkpoint**: BugPilot picks the latest
+stopped task offers **Resume from checkpoint**: BugWright picks the latest
 *valid* persisted stage rather than repeating completed model work and test
 runs. A stage only counts as complete if its whole artifact set is present — a
 patch with no diff is not a finished coding stage, and a green suite whose

@@ -2,8 +2,8 @@ import { config } from "dotenv";
 import { fileURLToPath } from "node:url";
 config({ path: fileURLToPath(new URL("../../../.env", import.meta.url)) });
 import PgBoss from "pg-boss";
-import { runTask } from "@bugpilot/agent";
-import { db } from "@bugpilot/database";
+import { runTask } from "@bugwright/agent";
+import { db } from "@bugwright/database";
 import { publishTask } from "./publish.js";
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
@@ -16,7 +16,7 @@ await boss.work<{ taskId: string }>("run-task", { batchSize: 1 }, async (jobs) =
     try {
       await runTask(job.data.taskId);
     } catch (error) {
-      console.error("BugPilot task failed", job.data.taskId, error);
+      console.error("BugWright task failed", job.data.taskId, error);
     }
 });
 await boss.work<{ taskId: string }>("publish-task", { batchSize: 1 }, async (jobs) => {
@@ -34,7 +34,7 @@ await boss.work<{ taskId: string }>("publish-task", { batchSize: 1 }, async (job
           detail: message,
         },
       });
-      console.error("BugPilot publish failed", job.data.taskId, error);
+      console.error("BugWright publish failed", job.data.taskId, error);
     }
 });
 const resumable = await db.task.findMany({
@@ -58,7 +58,7 @@ const resumable = await db.task.findMany({
 });
 for (const task of resumable)
   await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
-console.log("BugPilot worker is ready");
+console.log("BugWright worker is ready");
 let closing = false;
 const shutdown = async () => {
   if (closing) return;

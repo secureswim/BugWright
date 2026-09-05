@@ -33,7 +33,7 @@ function runScript(manager: PackageManager, script: string): string[] {
 
 export class NodeAdapter implements LanguageAdapter {
   readonly id = "node";
-  readonly image = process.env.BUGPILOT_RUNNER_IMAGE_NODE ?? "bugpilot-runner-node:latest";
+  readonly image = process.env.BUGWRIGHT_RUNNER_IMAGE_NODE ?? "bugwright-runner-node:latest";
 
   async detect(root: string): Promise<DetectedProject[]> {
     const directories = await findProjectDirectories(root, ["package.json"]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AttemptRecord, ReproductionReport, ResearchReport, TestReport } from "@bugpilot/shared";
+import { AttemptRecord, ReproductionReport, ResearchReport, TestReport } from "@bugwright/shared";
 import {
   coderContext,
   reproducerContext,

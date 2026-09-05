@@ -6,7 +6,7 @@ import { NodeAdapter, PythonAdapter, detectProjects, selectProject } from "./ind
 import { DetectedProject } from "./types.js";
 
 async function scaffold(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "bugpilot-adapters-"));
+  const root = await mkdtemp(path.join(tmpdir(), "bugwright-adapters-"));
   for (const [relative, content] of Object.entries(files)) {
     const absolute = path.join(root, relative);
     await mkdir(path.dirname(absolute), { recursive: true });

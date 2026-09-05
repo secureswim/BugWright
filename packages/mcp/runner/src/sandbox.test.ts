@@ -15,7 +15,7 @@ import { buildRunArgs } from "./sandbox.js";
  * with EACCES on every real project.
  */
 const base = {
-  image: "bugpilot-runner-node:latest",
+  image: "bugwright-runner-node:latest",
   root: "/work/task",
   workdir: "/workspace/frontend",
   command: {
@@ -24,7 +24,7 @@ const base = {
     timeoutMs: 300_000,
     projectPath: "frontend",
   },
-  mounts: [{ volume: "bugpilot-node-modules-abc", containerPath: "/workspace/frontend/node_modules" }],
+  mounts: [{ volume: "bugwright-node-modules-abc", containerPath: "/workspace/frontend/node_modules" }],
   readOnly: true,
 };
 
@@ -34,7 +34,7 @@ const pairs = (args: string[], flag: string) =>
 describe("buildRunArgs", () => {
   it("keeps the workspace writable by default", () => {
     // Read-only broke every project with a TypeScript test config, so it is
-    // now opt-in via BUGPILOT_RUNNER_READONLY.
+    // now opt-in via BUGWRIGHT_RUNNER_READONLY.
     const mount = pairs(buildRunArgs(base), "-v").find((value) => value.endsWith(":/workspace"));
     expect(mount).toBe("/work/task:/workspace");
   });
@@ -71,7 +71,7 @@ describe("buildRunArgs", () => {
 
   it("mounts the dependency cache volume", () => {
     expect(pairs(buildRunArgs(base), "-v")).toContain(
-      "bugpilot-node-modules-abc:/workspace/frontend/node_modules",
+      "bugwright-node-modules-abc:/workspace/frontend/node_modules",
     );
   });
 
@@ -93,6 +93,6 @@ describe("buildRunArgs", () => {
 
   it("puts the image immediately before the command", () => {
     const args = buildRunArgs(base);
-    expect(args[args.length - 3]).toBe("bugpilot-runner-node:latest");
+    expect(args[args.length - 3]).toBe("bugwright-runner-node:latest");
   });
 });

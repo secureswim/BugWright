@@ -1,5 +1,5 @@
 /**
- * Language adapters: how BugPilot verifies a repository it has never seen.
+ * Language adapters: how BugWright verifies a repository it has never seen.
  *
  * The runner used to hold a hardcoded allowlist of twelve npm command strings,
  * which meant the system could only ever verify Node projects. An adapter

@@ -183,7 +183,7 @@ export default function Home() {
       // unhandled rejection here would fill the console and, in development,
       // throw a full-screen overlay over a working UI.
       setApiError(
-        `Cannot reach the BugPilot API at ${API}. Start PostgreSQL with \`docker compose up -d postgres\`, ` +
+        `Cannot reach the BugWright API at ${API}. Start PostgreSQL with \`docker compose up -d postgres\`, ` +
           "then run `npm run dev` and check the api process for errors.",
       );
     } finally {
@@ -235,7 +235,7 @@ function Header({ health }: { health?: Health }) {
         <div className="brandMark">
           <GitBranch size={20} />
         </div>
-        <span>BugPilot</span>
+        <span>BugWright</span>
         <span className="beta">BETA</span>
       </div>
       <div className="headerRight">
@@ -278,7 +278,7 @@ function Dashboard({
             From issue to <em>verified patch.</em>
           </h1>
           <p>
-            BugPilot investigates GitHub issues, edits code through MCP, runs checks in an isolated container,
+            BugWright investigates GitHub issues, edits code through MCP, runs checks in an isolated container,
             and waits for your approval before opening a draft PR.
           </p>
         </div>
@@ -352,7 +352,7 @@ function NewTask({ onCreated }: { onCreated: (id: string) => void }) {
     try {
       const body = demo
         ? {
-            repositoryUrl: "https://github.com/bugpilot/demo",
+            repositoryUrl: "https://github.com/bugwright/demo",
             issueNumber: 1,
             issueTitle: "add() subtracts instead of adding",
             issueBody:
@@ -410,7 +410,7 @@ function NewTask({ onCreated }: { onCreated: (id: string) => void }) {
       {error && <p className="formError">{error}</p>}
       <button className="primary" disabled={sending} onClick={() => submit(false)}>
         <Play size={15} fill="currentColor" />
-        {sending ? "Starting…" : "Run BugPilot"}
+        {sending ? "Starting…" : "Run BugWright"}
       </button>
       <button className="demoButton" disabled={sending} onClick={() => submit(true)}>
         Try the built-in demo fixture
@@ -427,7 +427,7 @@ function Readiness({ health }: { health?: Health }) {
         <Container />
         <div>
           <strong>Finish local setup</strong>
-          <p>BugPilot keeps unsafe repository code inside Docker.</p>
+          <p>BugWright keeps unsafe repository code inside Docker.</p>
         </div>
       </div>
       <div className="checks">

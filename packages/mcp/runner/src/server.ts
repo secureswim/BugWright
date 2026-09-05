@@ -14,11 +14,11 @@ import {
   detectProjects,
   relativeToProject,
   selectProject,
-} from "@bugpilot/adapters";
+} from "@bugwright/adapters";
 
-const root = path.resolve(process.env.BUGPILOT_REPO_ROOT ?? "");
-if (!process.env.BUGPILOT_REPO_ROOT) throw new Error("BUGPILOT_REPO_ROOT is required");
-const dockerBin = process.env.BUGPILOT_DOCKER_BIN ?? "docker";
+const root = path.resolve(process.env.BUGWRIGHT_REPO_ROOT ?? "");
+if (!process.env.BUGWRIGHT_REPO_ROOT) throw new Error("BUGWRIGHT_REPO_ROOT is required");
+const dockerBin = process.env.BUGWRIGHT_DOCKER_BIN ?? "docker";
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
 
@@ -84,7 +84,7 @@ async function run(project: DetectedProject, command: CommandSpec, readOnly: boo
   const scope = createHash("sha256").update(`${root}\0${command.projectPath}`).digest("hex").slice(0, 20);
   const mounts = adapter
     .cacheMounts(project)
-    .map((mount) => ({ volume: `bugpilot-${mount.key}-${scope}`, containerPath: mount.containerPath }));
+    .map((mount) => ({ volume: `bugwright-${mount.key}-${scope}`, containerPath: mount.containerPath }));
 
   for (const mount of mounts) {
     await prepareVolume(adapter.image, mount.volume, mount.containerPath);
@@ -154,7 +154,7 @@ async function execute(
 
 const projectInput = { projectPath: z.string().default(".") };
 
-const server = new McpServer({ name: "bugpilot-runner", version: "0.2.0" });
+const server = new McpServer({ name: "bugwright-runner", version: "0.2.0" });
 
 server.tool("detect_project", "Detect every verifiable project in the repository", {}, async () => {
   const projects = await detectProjects(root);
@@ -162,7 +162,7 @@ server.tool("detect_project", "Detect every verifiable project in the repository
     return text({
       status: "unsupported",
       reason:
-        "No Node or Python project was detected. BugPilot can read and patch this repository but cannot verify it.",
+        "No Node or Python project was detected. BugWright can read and patch this repository but cannot verify it.",
       projects: [],
     });
   }

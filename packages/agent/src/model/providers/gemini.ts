@@ -8,7 +8,7 @@ import {
   ToolCall,
 } from "../types.js";
 
-/* Gemini wire types (only the fields BugPilot uses). */
+/* Gemini wire types (only the fields BugWright uses). */
 type GeminiPart = {
   text?: string;
   /** Set on thinking-model output; the part is a reasoning summary, not an answer. */

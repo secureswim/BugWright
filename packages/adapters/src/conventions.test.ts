@@ -10,7 +10,7 @@ import {
 } from "./conventions.js";
 
 async function scaffold(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(path.join(tmpdir(), "bugpilot-conventions-"));
+  const root = await mkdtemp(path.join(tmpdir(), "bugwright-conventions-"));
   for (const [relative, content] of Object.entries(files)) {
     const absolute = path.join(root, relative);
     await mkdir(path.dirname(absolute), { recursive: true });

@@ -1,10 +1,10 @@
 import "dotenv/config";
-import { db } from "@bugpilot/database";
-import { runTask } from "@bugpilot/agent";
+import { db } from "@bugwright/database";
+import { runTask } from "@bugwright/agent";
 const task = await db.task.create({
   data: {
-    repositoryUrl: "https://github.com/bugpilot/demo",
-    repositoryOwner: "bugpilot",
+    repositoryUrl: "https://github.com/bugwright/demo",
+    repositoryOwner: "bugwright",
     repositoryName: "demo",
     issueNumber: 1,
     issueTitle: "add() subtracts instead of adding",

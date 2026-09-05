@@ -20,7 +20,7 @@ export {
   relativeToProject,
 } from "./outcome.js";
 
-/** Every adapter BugPilot ships. Order decides ties when a repo matches several. */
+/** Every adapter BugWright ships. Order decides ties when a repo matches several. */
 export const adapters: LanguageAdapter[] = [new NodeAdapter(), new PythonAdapter()];
 
 export function adapterFor(id: string): LanguageAdapter {

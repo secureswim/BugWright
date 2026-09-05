@@ -1,5 +1,5 @@
 {
-  "name": "@bugpilot/mcp-git",
+  "name": "@bugwright/mcp-git",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
-    "@bugpilot/policy": "*",
+    "@bugwright/policy": "*",
     "@modelcontextprotocol/sdk": "^1.17.5",
     "zod": "^3.25.76"
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ResearchReport } from "@bugpilot/shared";
+import { ResearchReport } from "@bugwright/shared";
 import { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
 
 const report = (over: Partial<ResearchReport> = {}): ResearchReport => ({

@@ -2,14 +2,14 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, StdioServerParameters } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { db } from "@bugpilot/database";
+import { db } from "@bugwright/database";
 import {
   ToolRole,
   assertToolAllowed,
   environmentForServer,
   serversForRole,
   toolsForRole,
-} from "@bugpilot/policy";
+} from "@bugwright/policy";
 import { projectRoot } from "./runtime.js";
 
 export type ServerName = "repository" | "git" | "runner" | "github";
@@ -85,14 +85,14 @@ export class McpTools {
   private async start(role: ToolRole | "SYSTEM", server: ServerName, tools: string[] | undefined) {
     const root = projectRoot();
     const source = path.join(root, "packages", "mcp", server, "src", "server.ts");
-    const client = new Client({ name: `bugpilot-${role.toLowerCase()}-${server}`, version: "0.2.0" });
+    const client = new Client({ name: `bugwright-${role.toLowerCase()}-${server}`, version: "0.2.0" });
 
     const params: StdioServerParameters = {
       command: process.execPath,
       args: ["--require", path.join(root, "scripts", "windows-user-shim.cjs"), "--import", "tsx", source],
       env: environmentForServer(server, process.env, {
-        BUGPILOT_REPO_ROOT: this.repoRoot,
-        ...(tools ? { BUGPILOT_ALLOWED_TOOLS: tools.join(",") } : {}),
+        BUGWRIGHT_REPO_ROOT: this.repoRoot,
+        ...(tools ? { BUGWRIGHT_ALLOWED_TOOLS: tools.join(",") } : {}),
       }),
     };
 

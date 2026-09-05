@@ -2,7 +2,7 @@
 
 ## What is and is not claimed
 
-BugPilot makes **no performance claim over a single-agent baseline.** The
+BugWright makes **no performance claim over a single-agent baseline.** The
 baseline runner is scaffolded (`executionMode: "SINGLE_AGENT"`) but not
 implemented, so there is nothing to compare against yet.
 
@@ -86,7 +86,7 @@ comparison that reports only quality is marketing.
 ## Corpus
 
 See [../fixtures/README.md](../fixtures/README.md). Two of the four fixtures
-expect BugPilot to **refuse**, which is the property most benchmarks never
+expect BugWright to **refuse**, which is the property most benchmarks never
 measure: whether the system knows when to stop.
 
 A serious comparison needs 10–15 fixtures with hidden regression tests. Public
@@ -99,8 +99,8 @@ a corpus whose expected outcomes are documented.
 Record a run once and replay it forever:
 
 ```bash
-BUGPILOT_RECORD=1 BUGPILOT_CASSETTE=evaluations/cassettes/<name>.json npm run demo
-BUGPILOT_REPLAY=1 BUGPILOT_CASSETTE=evaluations/cassettes/<name>.json npm test
+BUGWRIGHT_RECORD=1 BUGWRIGHT_CASSETTE=evaluations/cassettes/<name>.json npm run demo
+BUGWRIGHT_REPLAY=1 BUGWRIGHT_CASSETTE=evaluations/cassettes/<name>.json npm test
 ```
 
 Replay errors on an unrecorded request rather than silently making a live call,

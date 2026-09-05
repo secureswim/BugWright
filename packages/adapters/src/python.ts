@@ -29,7 +29,7 @@ function runner(manager: PythonManager): string[] {
 
 export class PythonAdapter implements LanguageAdapter {
   readonly id = "python";
-  readonly image = process.env.BUGPILOT_RUNNER_IMAGE_PYTHON ?? "bugpilot-runner-python:latest";
+  readonly image = process.env.BUGWRIGHT_RUNNER_IMAGE_PYTHON ?? "bugwright-runner-python:latest";
 
   async detect(root: string): Promise<DetectedProject[]> {
     const directories = await findProjectDirectories(root, MARKERS);

@@ -40,7 +40,7 @@ Supporting decisions:
 - **Capability flags.** The loop reads `capabilities.jsonSchema` rather than
   branching on vendor names, so native constrained output is used where it
   exists and fence-parsing is the fallback where it does not.
-- **Per-role configuration.** `BUGPILOT_MODEL_<ROLE>` beats `BUGPILOT_MODEL`.
+- **Per-role configuration.** `BUGWRIGHT_MODEL_<ROLE>` beats `BUGWRIGHT_MODEL`.
 
 ## Consequences
 

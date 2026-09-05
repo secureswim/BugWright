@@ -2,10 +2,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { toolGate } from "@bugpilot/policy";
+import { toolGate } from "@bugwright/policy";
 
-const root = path.resolve(process.env.BUGPILOT_REPO_ROOT ?? "");
-if (!process.env.BUGPILOT_REPO_ROOT) throw new Error("BUGPILOT_REPO_ROOT is required");
+const root = path.resolve(process.env.BUGWRIGHT_REPO_ROOT ?? "");
+if (!process.env.BUGWRIGHT_REPO_ROOT) throw new Error("BUGWRIGHT_REPO_ROOT is required");
 
 /** Only the tools the connecting role may use are registered. */
 const allowed = toolGate();
@@ -28,7 +28,7 @@ async function git(args: string[]) {
   });
 }
 
-const server = new McpServer({ name: "bugpilot-git", version: "0.2.0" });
+const server = new McpServer({ name: "bugwright-git", version: "0.2.0" });
 
 if (allowed("get_status")) {
   server.tool("get_status", "Get machine-readable repository status", {}, async () =>

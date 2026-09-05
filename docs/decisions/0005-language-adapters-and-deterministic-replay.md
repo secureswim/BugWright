@@ -9,7 +9,7 @@ were hardcoded.
 
 **Verification** was a `Set` of twelve npm command strings, executed as
 `sh -lc <string>` inside the container. Project detection looked for
-`package.json` at the root and one level below. So BugPilot could only verify
+`package.json` at the root and one level below. So BugWright could only verify
 Node repositories, and could not see the `packages/*/package.json` layout that
 most real TypeScript repositories use.
 

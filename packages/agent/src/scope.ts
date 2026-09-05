@@ -1,4 +1,4 @@
-import { ResearchReport, ScopeVerdict } from "@bugpilot/shared";
+import { ResearchReport, ScopeVerdict } from "@bugwright/shared";
 
 /** Parses `git diff --name-status` output into repository-relative paths. */
 export function changedFilesFromNameStatus(raw: string): string[] {

@@ -1,5 +1,5 @@
 {
-  "name": "bugpilot",
+  "name": "bugwright",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "db:migrate": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
     "db:push": "prisma db push --schema packages/database/prisma/schema.prisma",
     "demo": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/run-demo.ts",
-    "dev": "concurrently -n api,worker,web -c cyan,magenta,green \"npm run dev -w @bugpilot/api\" \"npm run dev -w @bugpilot/worker\" \"npm run dev -w @bugpilot/web\"",
+    "dev": "concurrently -n api,worker,web -c cyan,magenta,green \"npm run dev -w @bugwright/api\" \"npm run dev -w @bugwright/worker\" \"npm run dev -w @bugwright/web\"",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

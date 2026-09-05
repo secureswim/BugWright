@@ -5,7 +5,7 @@ tests (does detection, install and test work for this language?) and as the
 evaluation corpus for the single-agent versus multi-agent comparison.
 
 Each fixture records what a correct run should do, so a fixture can fail in
-two distinct ways: BugPilot fails to fix a real bug, or BugPilot "fixes"
+two distinct ways: BugWright fails to fix a real bug, or BugWright "fixes"
 something it should have refused.
 
 | Fixture | Language | Expected outcome |

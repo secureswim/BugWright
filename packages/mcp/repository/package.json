@@ -1,10 +1,10 @@
 {
-  "name": "@bugpilot/mcp-repository",
+  "name": "@bugwright/mcp-repository",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "bugpilot-mcp-repository": "src/server.ts"
+    "bugwright-mcp-repository": "src/server.ts"
   },
   "scripts": {
     "build": "tsc -b",
@@ -12,8 +12,8 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
-    "@bugpilot/adapters": "*",
-    "@bugpilot/policy": "*",
+    "@bugwright/adapters": "*",
+    "@bugwright/policy": "*",
     "@modelcontextprotocol/sdk": "^1.17.5",
     "zod": "^3.25.76"
   }

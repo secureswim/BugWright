@@ -1,5 +1,5 @@
 {
-  "name": "@bugpilot/adapters",
+  "name": "@bugwright/adapters",
   "version": "0.1.0",
   "private": true,
   "type": "module",

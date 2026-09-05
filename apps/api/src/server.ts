@@ -5,11 +5,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import PgBoss from "pg-boss";
 import { spawn } from "node:child_process";
-import { db } from "@bugpilot/database";
-import { evaluationMetrics } from "@bugpilot/evaluation";
-import { createTaskSchema } from "@bugpilot/shared";
-import { approvalHash, parseGitHubRepository } from "@bugpilot/policy";
-import { McpTools, reviewerIsIndependent } from "@bugpilot/agent";
+import { db } from "@bugwright/database";
+import { evaluationMetrics } from "@bugwright/evaluation";
+import { createTaskSchema } from "@bugwright/shared";
+import { approvalHash, parseGitHubRepository } from "@bugwright/policy";
+import { McpTools, reviewerIsIndependent } from "@bugwright/agent";
 import { resumeCheckpoint } from "./resume.js";
 
 const app = Fastify({ logger: true });
@@ -74,20 +74,20 @@ function modelHealth() {
   const configured = Object.fromEntries(
     roles.map((role) => [
       role,
-      process.env[`BUGPILOT_MODEL_${role}`] ?? process.env.BUGPILOT_MODEL ?? "gemini",
+      process.env[`BUGWRIGHT_MODEL_${role}`] ?? process.env.BUGWRIGHT_MODEL ?? "gemini",
     ]),
   );
   return {
     configured,
     reviewerIndependent: reviewerIsIndependent(),
-    replaying: process.env.BUGPILOT_REPLAY === "1",
+    replaying: process.env.BUGWRIGHT_REPLAY === "1",
   };
 }
 
 async function dockerAvailable() {
   return await new Promise<boolean>((resolve) => {
     const child = spawn(
-      process.env.BUGPILOT_DOCKER_BIN ?? "docker",
+      process.env.BUGWRIGHT_DOCKER_BIN ?? "docker",
       ["info", "--format", "{{.ServerVersion}}"],
       { windowsHide: true, shell: false },
     );
@@ -168,7 +168,7 @@ app.post("/tasks", async (req, reply) => {
     data: { ...input, repositoryOwner: repo.owner, repositoryName: repo.name },
   });
   await db.taskEvent.create({
-    data: { taskId: task.id, type: "TASK_CREATED", title: "Task queued for BugPilot" },
+    data: { taskId: task.id, type: "TASK_CREATED", title: "Task queued for BugWright" },
   });
   await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
   return reply.code(201).send(json(task));

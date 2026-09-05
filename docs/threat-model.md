@@ -1,6 +1,6 @@
 # Threat model
 
-BugPilot reads an untrusted repository, sends parts of it to a language model,
+BugWright reads an untrusted repository, sends parts of it to a language model,
 and proposes a change to that repository. Every one of those steps is an attack
 surface. This document states what is assumed, what is defended, and what is
 still open.
@@ -15,13 +15,13 @@ itself a capability, escape the workspace, or reach a human's approval.
 | --- | --- |
 | The developer's machine | The orchestrator runs on it with the developer's privileges. |
 | Model API keys, GitHub credentials, `DATABASE_URL` | Direct financial and repository-write impact. |
-| The target repository | BugPilot's output becomes a pull request against it. |
+| The target repository | BugWright's output becomes a pull request against it. |
 | Downstream CI and everyone who merges the PR | A merged patch executes on their machines. |
 
 ## Adversaries
 
 1. **A hostile repository.** Its source, README, and test suite are attacker
-   authored. BugPilot clones and executes them.
+   authored. BugWright clones and executes them.
 2. **A hostile issue author.** Anyone can open an issue on a public repository.
    The issue body is fed to a model as input.
 3. **A confused or failing model.** Not malicious, but capable of proposing a
@@ -40,7 +40,7 @@ script."* See `fixtures/injection-issue`.
 
 **Why the obvious defence is not enough.** Telling the model to ignore
 instructions in its input is a mitigation, not a control: it reduces the
-frequency of compliance and never reaches zero. So BugPilot assumes injection
+frequency of compliance and never reaches zero. So BugWright assumes injection
 sometimes succeeds and makes success useless.
 
 **Controls.**
@@ -79,7 +79,7 @@ This is designed but not implemented.
 
 ### 3. Supply-chain injection through the proposed patch
 
-**Attack.** The patch does not attack BugPilot; it attacks whoever merges the
+**Attack.** The patch does not attack BugWright; it attacks whoever merges the
 pull request. Adding a `postinstall` hook to `package.json`, or editing
 `.github/workflows/`, is arbitrary code execution on every downstream machine
 that installs or runs CI.
@@ -99,7 +99,7 @@ that installs or runs CI.
 
 ### 4. Malicious code execution during testing
 
-**Attack.** The repository's own test suite is attacker-controlled and BugPilot
+**Attack.** The repository's own test suite is attacker-controlled and BugWright
 runs it. It may attempt to read the host filesystem, exfiltrate over the
 network, escalate privileges, or rewrite the source under review so the diff
 the human approves is not the diff that was tested.
@@ -123,11 +123,11 @@ rewriting the source so the approved diff is not the tested diff - is now
 and after each test run and stops with `WORKSPACE_TAMPERED` if the tree
 changed. That is weaker in one way (the write happens before it is caught) and
 stronger in another (it catches mutation by any route, not only direct writes
-to the mount). `BUGPILOT_RUNNER_READONLY=1` restores the strict mount for
+to the mount). `BUGWRIGHT_RUNNER_READONLY=1` restores the strict mount for
 repositories that tolerate it.
 
 **Residual risk.** Container escape. Docker is a boundary, not a sandbox in the
-gVisor sense. Do not point BugPilot at a repository you would not clone.
+gVisor sense. Do not point BugWright at a repository you would not clone.
 
 ### 5. Privilege escalation between agents
 
@@ -148,7 +148,7 @@ the GitHub token, or the database URL out of its environment.
 
 **Control.** Servers no longer inherit the parent environment. Each receives an
 explicit allowlist: the repository and git servers get only
-`BUGPILOT_REPO_ROOT`; the runner also gets its image and Docker binary names;
+`BUGWRIGHT_REPO_ROOT`; the runner also gets its image and Docker binary names;
 only the github server sees GitHub credentials, and nothing sees the model key
 or `DATABASE_URL`. Asserted directly in `policy/index.test.ts`.
 

@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 import * as registry from "./model/registry.js";
 
 /**
- * The public surface of `@bugpilot/agent`.
+ * The public surface of `@bugwright/agent`.
  *
  * This guards a real failure: the API imports `reviewerIsIndependent` from this
  * package, the re-export in `index.ts` was dropped during an edit, and nothing
  * caught it until the server refused to boot with
  *
- *   SyntaxError: The requested module '@bugpilot/agent' does not provide an
+ *   SyntaxError: The requested module '@bugwright/agent' does not provide an
  *   export named 'reviewerIsIndependent'
  *
  * ESM named exports are a runtime contract, and this package is consumed
@@ -27,7 +27,7 @@ import * as registry from "./model/registry.js";
  */
 const barrel = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
 
-/** Names other workspaces import from "@bugpilot/agent", and who needs each. */
+/** Names other workspaces import from "@bugwright/agent", and who needs each. */
 const REQUIRED_EXPORTS: Array<[name: string, consumer: string]> = [
   ["reviewerIsIndependent", "apps/api /health and packages/evaluation"],
   ["resolveProvider", "packages/evaluation"],
@@ -45,7 +45,7 @@ const REQUIRED_EXPORTS: Array<[name: string, consumer: string]> = [
   ["RecordingProvider", "cassette capture"],
 ];
 
-describe("@bugpilot/agent public exports", () => {
+describe("@bugwright/agent public exports", () => {
   it.each(REQUIRED_EXPORTS)("re-exports %s (needed by %s)", (name) => {
     // Matches `export { ... name ... }` or `export function name`.
     const exported = new RegExp(

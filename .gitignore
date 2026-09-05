@@ -8,3 +8,9 @@ workspaces/
 coverage/
 *.log
 .DS_Store
+
+# Never commit a real environment file, under any suffix. A backup named
+# .env.backup-before-fix once slipped past the bare ".env" rule below and
+# carried a live API key into a commit.
+.env.*
+!.env.example

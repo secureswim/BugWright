@@ -107,7 +107,7 @@ export function toolsForRole(role: ToolRole, server: string): string[] {
 /**
  * Files no agent may write, whatever the patch claims to be doing.
  *
- * The CI and package-manifest entries are not incidental. BugPilot's output is
+ * The CI and package-manifest entries are not incidental. BugWright's output is
  * a pull request against someone's repository; a patch that edits
  * `.github/workflows/` or a `package.json` lifecycle script is arbitrary code
  * execution on whatever machine merges it. That is a supply-chain path, so it
@@ -193,13 +193,13 @@ export function assertTestPath(pathname: string) {
  * needs to do its job.
  */
 const SERVER_ENV_ALLOWLIST: Record<string, string[]> = {
-  repository: ["BUGPILOT_REPO_ROOT"],
-  git: ["BUGPILOT_REPO_ROOT"],
+  repository: ["BUGWRIGHT_REPO_ROOT"],
+  git: ["BUGWRIGHT_REPO_ROOT"],
   runner: [
-    "BUGPILOT_REPO_ROOT",
-    "BUGPILOT_DOCKER_BIN",
-    "BUGPILOT_RUNNER_IMAGE_NODE",
-    "BUGPILOT_RUNNER_IMAGE_PYTHON",
+    "BUGWRIGHT_REPO_ROOT",
+    "BUGWRIGHT_DOCKER_BIN",
+    "BUGWRIGHT_RUNNER_IMAGE_NODE",
+    "BUGWRIGHT_RUNNER_IMAGE_PYTHON",
   ],
   github: ["GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_INSTALLATION_ID", "GITHUB_PRIVATE_KEY"],
 };
@@ -214,13 +214,13 @@ const BASE_ENV = [
   "USERPROFILE",
   "NODE_OPTIONS",
   "TZ",
-  "BUGPILOT_ALLOWED_TOOLS",
+  "BUGWRIGHT_ALLOWED_TOOLS",
 ];
 
 /**
  * Reads the tool gate an MCP server was started with.
  *
- * A server process is spawned per role with `BUGPILOT_ALLOWED_TOOLS` set to
+ * A server process is spawned per role with `BUGWRIGHT_ALLOWED_TOOLS` set to
  * exactly the tools that role may call, and registers only those. This is what
  * turns the permission matrix from an access check into a capability boundary:
  * the Tester's repository server has no `read_file` to call, so a violation is
@@ -230,7 +230,7 @@ const BASE_ENV = [
  * script and manual runs need.
  */
 export function toolGate(environment: NodeJS.ProcessEnv = process.env): (tool: string) => boolean {
-  const raw = environment.BUGPILOT_ALLOWED_TOOLS;
+  const raw = environment.BUGWRIGHT_ALLOWED_TOOLS;
   if (raw === undefined) return () => true;
   const allowed = new Set(
     raw

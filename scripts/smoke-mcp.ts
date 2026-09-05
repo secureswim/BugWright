@@ -1,17 +1,17 @@
 import "dotenv/config";
 import { cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { db } from "@bugpilot/database";
-import { McpTools } from "@bugpilot/agent";
-const project = path.resolve(process.env.BUGPILOT_PROJECT_ROOT ?? process.cwd()),
+import { db } from "@bugwright/database";
+import { McpTools } from "@bugwright/agent";
+const project = path.resolve(process.env.BUGWRIGHT_PROJECT_ROOT ?? process.cwd()),
   workspace = path.join(project, "workspaces", "mcp-smoke");
 await rm(workspace, { recursive: true, force: true });
 await mkdir(path.dirname(workspace), { recursive: true });
 await cp(path.join(project, "fixtures", "calculator-bug"), workspace, { recursive: true });
 const task = await db.task.create({
     data: {
-      repositoryUrl: "https://github.com/bugpilot/mcp-smoke",
-      repositoryOwner: "bugpilot",
+      repositoryUrl: "https://github.com/bugwright/mcp-smoke",
+      repositoryOwner: "bugwright",
       repositoryName: "mcp-smoke",
       issueNumber: 1,
       issueTitle: "MCP smoke test",

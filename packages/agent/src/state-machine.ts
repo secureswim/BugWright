@@ -4,7 +4,7 @@ import {
   ReviewReport,
   ScopeVerdict,
   TestReport,
-} from "@bugpilot/shared";
+} from "@bugwright/shared";
 
 /**
  * Routing rules the model may advise on but never override.
@@ -48,7 +48,7 @@ function evidence(report: TestReport): string {
 /* -------------------------------------------------------------------------- */
 
 /**
- * A bug that cannot be reproduced is not a bug BugPilot should try to fix.
+ * A bug that cannot be reproduced is not a bug BugWright should try to fix.
  *
  * Stopping here is a correct outcome, not a failure: without a test that fails
  * before the patch there is no way to demonstrate afterwards that anything was

@@ -6,7 +6,7 @@ import {
   ResearchTask,
   ReviewReport,
   TestReport,
-} from "@bugpilot/shared";
+} from "@bugwright/shared";
 
 /**
  * What each role is allowed to see.

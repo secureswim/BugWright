@@ -1,7 +1,7 @@
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { db, TaskState } from "@bugpilot/database";
+import { db, TaskState } from "@bugwright/database";
 import {
   AttemptRecord,
   ManagerPlan,
@@ -10,8 +10,8 @@ import {
   ResearchReport,
   ReviewReport,
   TestReport,
-} from "@bugpilot/shared";
-import { approvalHash, resolveInside } from "@bugpilot/policy";
+} from "@bugwright/shared";
+import { approvalHash, resolveInside } from "@bugwright/policy";
 import { McpTools, parseToolJson } from "./mcp.js";
 import {
   coder,
@@ -30,7 +30,7 @@ import {
   routeAfterTest,
 } from "./state-machine.js";
 import { assessScope, changedFilesFromDiff } from "./scope.js";
-import { detectTransformError } from "@bugpilot/adapters";
+import { detectTransformError } from "@bugwright/adapters";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
 
@@ -83,7 +83,7 @@ async function prepare(
     await command("git", ["add", "."], repoRoot);
     await command(
       "git",
-      ["-c", "user.name=BugPilot", "-c", "user.email=bugpilot@local", "commit", "-m", "fixture"],
+      ["-c", "user.name=BugWright", "-c", "user.email=bugwright@local", "commit", "-m", "fixture"],
       repoRoot,
     );
   } else {

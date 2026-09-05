@@ -1,5 +1,5 @@
 {
-  "name": "@bugpilot/agent",
+  "name": "@bugwright/agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,10 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@bugpilot/adapters": "*",
-    "@bugpilot/database": "*",
-    "@bugpilot/policy": "*",
-    "@bugpilot/shared": "*",
+    "@bugwright/adapters": "*",
+    "@bugwright/database": "*",
+    "@bugwright/policy": "*",
+    "@bugwright/shared": "*",
     "@modelcontextprotocol/sdk": "^1.17.5"
   }
 }

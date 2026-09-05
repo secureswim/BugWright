@@ -21,7 +21,7 @@ an intention more than it enforced a boundary.
 github) exposing enumerated operations, over the official TypeScript SDK.
 
 **Per-role server processes** for enforcement. Each role gets its own server
-instances, started with `BUGPILOT_ALLOWED_TOOLS` naming exactly the tools that
+instances, started with `BUGWRIGHT_ALLOWED_TOOLS` naming exactly the tools that
 role may call. The server registers only those, so the Tester's repository
 server has no `read_file` to call and the Coder has no runner at all.
 

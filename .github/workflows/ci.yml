@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  # Runs on both platforms on purpose. BugPilot is developed on Windows and
+  # Runs on both platforms on purpose. BugWright is developed on Windows and
   # deployed on Linux, and it spawns processes, resolves paths and shells out
   # to git and docker - all places the two differ. An Ubuntu-only matrix let a
   # path-resolution test that hardcoded POSIX separators pass in CI and fail on
@@ -43,7 +43,7 @@ jobs:
       - run: npm run db:generate
       - run: npm run format:check
       - run: npm run lint
-      - run: npm run build -w @bugpilot/web
+      - run: npm run build -w @bugwright/web
 
   docker:
     runs-on: ubuntu-latest
@@ -51,5 +51,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build runner images
         run: |
-          docker build -t bugpilot-runner-node:ci -f docker/runner.node.Dockerfile .
-          docker build -t bugpilot-runner-python:ci -f docker/runner.python.Dockerfile .
+          docker build -t bugwright-runner-node:ci -f docker/runner.node.Dockerfile .
+          docker build -t bugwright-runner-python:ci -f docker/runner.python.Dockerfile .

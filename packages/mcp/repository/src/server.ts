@@ -11,11 +11,11 @@ import {
   assertTestPath,
   resolveInside,
   toolGate,
-} from "@bugpilot/policy";
-import { validateTestExtension } from "@bugpilot/adapters";
+} from "@bugwright/policy";
+import { validateTestExtension } from "@bugwright/adapters";
 
-const root = path.resolve(process.env.BUGPILOT_REPO_ROOT ?? "");
-if (!process.env.BUGPILOT_REPO_ROOT) throw new Error("BUGPILOT_REPO_ROOT is required");
+const root = path.resolve(process.env.BUGWRIGHT_REPO_ROOT ?? "");
+if (!process.env.BUGWRIGHT_REPO_ROOT) throw new Error("BUGWRIGHT_REPO_ROOT is required");
 
 /**
  * Only the tools the connecting role may use are registered. A role that lacks
@@ -90,7 +90,7 @@ async function fallbackSearch(query: string, glob?: string) {
   return matches.join("") || "No matches";
 }
 
-const server = new McpServer({ name: "bugpilot-repository", version: "0.2.0" });
+const server = new McpServer({ name: "bugwright-repository", version: "0.2.0" });
 
 if (allowed("list_tree")) {
   server.tool(

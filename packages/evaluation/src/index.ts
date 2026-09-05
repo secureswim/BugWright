@@ -1,5 +1,5 @@
-import { db } from "@bugpilot/database";
-import { reviewerIsIndependent } from "@bugpilot/agent";
+import { db } from "@bugwright/database";
+import { reviewerIsIndependent } from "@bugwright/agent";
 
 const ratio = (numerator: number, denominator: number) =>
   denominator ? Number((numerator / denominator).toFixed(3)) : 0;

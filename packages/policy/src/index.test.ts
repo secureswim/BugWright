@@ -243,12 +243,12 @@ describe("secret scoping for MCP servers", () => {
     GEMINI_API_KEY: "gem-secret",
     GITHUB_TOKEN: "gh-secret",
     DATABASE_URL: "postgres://user:pw@host/db",
-    BUGPILOT_REPO_ROOT: "/work/task",
+    BUGWRIGHT_REPO_ROOT: "/work/task",
   } as NodeJS.ProcessEnv;
 
   it("denies the repository server every credential", () => {
     const environment = environmentForServer("repository", source);
-    expect(environment.BUGPILOT_REPO_ROOT).toBe("/work/task");
+    expect(environment.BUGWRIGHT_REPO_ROOT).toBe("/work/task");
     expect(environment.GEMINI_API_KEY).toBeUndefined();
     expect(environment.GITHUB_TOKEN).toBeUndefined();
     expect(environment.DATABASE_URL).toBeUndefined();

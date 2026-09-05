@@ -42,14 +42,14 @@ function instantiate(spec: ProviderSpec): ModelProvider {
 }
 
 const cassettePath = () =>
-  process.env.BUGPILOT_CASSETTE ?? path.resolve(process.cwd(), "evaluations/cassettes/default.json");
+  process.env.BUGWRIGHT_CASSETTE ?? path.resolve(process.cwd(), "evaluations/cassettes/default.json");
 
 /**
  * Resolves the provider for a role.
  *
  * Precedence, most specific first:
- *   1. `BUGPILOT_MODEL_<ROLE>`  e.g. BUGPILOT_MODEL_REVIEWER=anthropic:claude-sonnet-4-20250514
- *   2. `BUGPILOT_MODEL`         default for every role
+ *   1. `BUGWRIGHT_MODEL_<ROLE>`  e.g. BUGWRIGHT_MODEL_REVIEWER=anthropic:claude-sonnet-4-20250514
+ *   2. `BUGWRIGHT_MODEL`         default for every role
  *   3. Gemini, for backward compatibility with single-provider setups
  *
  * Per-role configuration is what makes two things possible: cheap models for
@@ -58,12 +58,12 @@ const cassettePath = () =>
  * property of the system rather than of the prompt.
  */
 export function resolveProvider(role: ModelRole): ModelProvider {
-  if (process.env.BUGPILOT_REPLAY === "1") {
+  if (process.env.BUGWRIGHT_REPLAY === "1") {
     return new ReplayProvider(cassettePath());
   }
 
-  const roleSpec = process.env[`BUGPILOT_MODEL_${role}`];
-  const globalSpec = process.env.BUGPILOT_MODEL;
+  const roleSpec = process.env[`BUGWRIGHT_MODEL_${role}`];
+  const globalSpec = process.env.BUGWRIGHT_MODEL;
   const spec = roleSpec
     ? parseSpec(roleSpec)
     : globalSpec
@@ -71,7 +71,7 @@ export function resolveProvider(role: ModelRole): ModelProvider {
       : { provider: "gemini" as const };
 
   const provider = instantiate(spec);
-  if (process.env.BUGPILOT_RECORD === "1") return new RecordingProvider(provider, cassettePath());
+  if (process.env.BUGWRIGHT_RECORD === "1") return new RecordingProvider(provider, cassettePath());
   return provider;
 }
 

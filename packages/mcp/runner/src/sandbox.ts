@@ -1,4 +1,4 @@
-import { CommandSpec } from "@bugpilot/adapters";
+import { CommandSpec } from "@bugwright/adapters";
 
 /**
  * Opt-in fully read-only workspace.
@@ -16,7 +16,7 @@ import { CommandSpec } from "@bugpilot/adapters";
  * and stops if the workspace changed. Detection with evidence rather than
  * prevention that does not work. See docs/threat-model.md.
  */
-const FORCE_READ_ONLY = process.env.BUGPILOT_RUNNER_READONLY === "1";
+const FORCE_READ_ONLY = process.env.BUGWRIGHT_RUNNER_READONLY === "1";
 
 /** Builds the container argv. Pure, so the sandbox flags can be unit-tested. */
 export function buildRunArgs(input: {

@@ -1,5 +1,5 @@
 {
-  "name": "@bugpilot/evaluation",
+  "name": "@bugwright/evaluation",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@bugpilot/agent": "*",
-    "@bugpilot/database": "*"
+    "@bugwright/agent": "*",
+    "@bugwright/database": "*"
   }
 }

@@ -85,7 +85,7 @@ those. `assertToolAllowed` still runs client-side for defence in depth and for
 the `TOOL_DENIED` audit event.
 
 Servers receive an explicit environment allowlist rather than the parent
-environment: the repository and git servers see only `BUGPILOT_REPO_ROOT`.
+environment: the repository and git servers see only `BUGWRIGHT_REPO_ROOT`.
 Neither the model API key nor `DATABASE_URL` reaches any of them.
 
 The runner accepts an enumerated operation plus a detected project path; a
