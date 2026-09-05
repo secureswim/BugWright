@@ -923,7 +923,7 @@ export async function tester(
 
     const typecheckResult = await call<RunnerResult>("run_typecheck", { projectPath });
     await record(typecheckResult);
-    const typecheck = statusOf(typecheckResult);
+    let typecheck = statusOf(typecheckResult);
     if (typecheckResult.status === "ran") {
       testsRun.push(typecheckResult.command ?? "typecheck");
       if (typecheckResult.exitCode !== 0) {
@@ -936,6 +936,7 @@ export async function tester(
             category: "code",
           });
         } else {
+          typecheck = "advisory";
           advisories.push("type checking reports pre-existing errors outside the changed files");
         }
       }
@@ -945,7 +946,7 @@ export async function tester(
 
     const lintResult = await call<RunnerResult>("run_lint", { projectPath, changedFiles: changed });
     await record(lintResult);
-    const lint = statusOf(lintResult);
+    let lint = statusOf(lintResult);
     if (lintResult.status === "ran") {
       testsRun.push(lintResult.command ?? "lint");
       if (lintResult.exitCode !== 0) {
@@ -961,6 +962,7 @@ export async function tester(
             category: "code",
           });
         } else {
+          lint = "advisory";
           advisories.push("lint reports pre-existing problems outside the changed files");
         }
       }

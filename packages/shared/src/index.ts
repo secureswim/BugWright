@@ -100,8 +100,16 @@ export interface TestFailure {
   category?: "code" | "infrastructure" | "pre-existing";
 }
 
-/** Outcome of a check the project may or may not define. */
-export type CheckStatus = "passed" | "failed" | "not-configured" | "not-run";
+/**
+ * Outcome of a check the project may or may not define.
+ *
+ * `advisory` is the one that needs explaining: the check ran and exited
+ * non-zero, but every problem it reported is in a file this patch never
+ * touched. That is the repository's pre-existing debt, not a verdict on the
+ * change, and recording it as `failed` made stop messages blame the wrong
+ * thing.
+ */
+export type CheckStatus = "passed" | "failed" | "advisory" | "not-configured" | "not-run";
 
 /**
  * The two questions a Tester answers, kept separate on purpose.
