@@ -220,3 +220,59 @@ describe("routeAfterReview", () => {
     expect(decision.next).toBe("HUMAN_APPROVAL");
   });
 });
+
+/**
+ * A stop reason that says a counter ran out, without saying what the counter
+ * was counting, sends the reader back to the logs. These assert the evidence
+ * survives into the message a human actually sees.
+ */
+describe("stop reasons carry the evidence", () => {
+  it("names the failing check when the revision limit is hit", () => {
+    const decision = routeAfterTest(
+      testReport({
+        passed: false,
+        regression: "failed",
+        failures: [
+          {
+            command: "npm test",
+            message: "2 tests failed in Dashboard.test.tsx",
+            relevantOutput: "",
+            category: "code",
+          },
+        ],
+      }),
+      undefined,
+      2,
+      2,
+    );
+    expect(decision.next).toBe("NEEDS_ATTENTION");
+    expect(decision.reason).toContain("the existing suite fails");
+    expect(decision.reason).toContain("2 tests failed in Dashboard.test.tsx");
+  });
+
+  it("says the reproduction test is the blocker when only it fails", () => {
+    const decision = routeAfterTest(
+      testReport({ passed: true, reproductionFixed: "failed" }),
+      undefined,
+      2,
+      2,
+    );
+    expect(decision.reason).toContain("the reproduction test still fails");
+  });
+
+  it("falls back to the summary when no individual check is marked failed", () => {
+    const decision = routeAfterTest(
+      testReport({ passed: false, summary: "something unusual happened" }),
+      undefined,
+      2,
+      2,
+    );
+    expect(decision.reason).toContain("something unusual happened");
+  });
+
+  it("still routes a green run to review rather than stopping", () => {
+    // The property the message confusion hid: a fully passing report never
+    // reaches the limit branch at all.
+    expect(routeAfterTest(testReport(), undefined, 99, 2).next).toBe("REVIEWER");
+  });
+});

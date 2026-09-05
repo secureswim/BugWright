@@ -48,12 +48,16 @@ model Task {
   leaseExpiresAt  DateTime?
 
   attempt          Int     @default(0)
-  maxAttempts      Int     @default(3)
+  // Budgets. Raised from 3/2/20/50: a real repository spends cycles on things
+  // that are not the model's fault - an unresolvable import, a runner that
+  // collected nothing - and two revisions left no room to recover from one bad
+  // attempt before the run was stopped.
+  maxAttempts      Int     @default(5)
   revisionCycle    Int     @default(0)
-  maxRevisions     Int     @default(2)
-  maxAgentRuns     Int     @default(20)
-  maxModelCalls    Int     @default(50)
-  timeoutMs        Int     @default(900000)
+  maxRevisions     Int     @default(4)
+  maxAgentRuns     Int     @default(32)
+  maxModelCalls    Int     @default(90)
+  timeoutMs        Int     @default(1800000)
   delegationCycles Int     @default(0)
   modelCalls       Int     @default(0)
   costUsd          Float   @default(0)

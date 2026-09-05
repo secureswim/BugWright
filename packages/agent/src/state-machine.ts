@@ -23,6 +23,26 @@ export interface Limits {
 
 const stop = (reason: string): ManagerDecision => ({ next: "NEEDS_ATTENTION", reason });
 
+/**
+ * What actually failed, appended to a stop reason.
+ *
+ * "The configured revision limit was reached" is true and useless: it says a
+ * counter ran out without saying what the counter was counting. A run that
+ * stopped for a knowable reason should say the reason.
+ */
+function evidence(report: TestReport): string {
+  const parts: string[] = [];
+  if (report.reproductionFixed === "failed") parts.push("the reproduction test still fails");
+  if (report.regression === "failed") parts.push("the existing suite fails");
+  if (report.typecheck === "failed") parts.push("type checking fails");
+  if (report.lint === "failed") parts.push("lint fails on a changed file");
+  for (const failure of report.failures.slice(0, 3)) {
+    parts.push(`${failure.command}: ${failure.message}`);
+  }
+  if (!parts.length) parts.push(report.summary);
+  return ` Last run: ${parts.join("; ")}.`;
+}
+
 /* -------------------------------------------------------------------------- */
 /* After reproduction                                                          */
 /* -------------------------------------------------------------------------- */
@@ -81,7 +101,9 @@ export function routeAfterTest(
   // now passes. A green regression suite alone is not evidence of a fix.
   if (report.passed && report.reproductionFixed === "failed") {
     return revisionCycle >= maxRevisions
-      ? stop("Nothing regressed, but the reproduction test still fails: the bug is not fixed.")
+      ? stop(
+          `Nothing regressed, but the reproduction test still fails: the bug is not fixed.${evidence(report)}`,
+        )
       : {
           next: "CODER",
           reason: "The regression suite is green but the reproduction test still fails.",
@@ -97,7 +119,7 @@ export function routeAfterTest(
   }
 
   if (revisionCycle >= maxRevisions) {
-    return stop("The configured revision limit was reached.");
+    return stop(`The configured revision limit was reached without a green run.${evidence(report)}`);
   }
 
   // The Manager may advise research over another code revision, but only within
