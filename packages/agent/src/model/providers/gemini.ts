@@ -11,6 +11,14 @@ import {
 /* Gemini wire types (only the fields BugPilot uses). */
 type GeminiPart = {
   text?: string;
+  /** Set on thinking-model output; the part is a reasoning summary, not an answer. */
+  thought?: boolean;
+  /**
+   * Opaque signature Gemini 3 attaches to thought and functionCall parts. It
+   * must be sent back unchanged when the turn is replayed, so it is never
+   * reconstructed - only carried.
+   */
+  thoughtSignature?: string;
   functionCall?: { name: string; args?: Record<string, unknown> };
   functionResponse?: { name: string; response: unknown };
 };
@@ -33,9 +41,19 @@ const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
  */
 const synthesizeId = (name: string, index: number) => `${name}:${index}`;
 
-function toGeminiContents(messages: Message[]): GeminiContent[] {
+const isGeminiContent = (value: unknown): value is GeminiContent =>
+  typeof value === "object" && value !== null && Array.isArray((value as GeminiContent).parts);
+
+export function toGeminiContents(messages: Message[]): GeminiContent[] {
   const contents: GeminiContent[] = [];
   for (const message of messages) {
+    // Replay an assistant turn exactly as Gemini produced it. Rebuilding it
+    // from canonical parts drops `thoughtSignature`, and Gemini 3 rejects the
+    // next request with "Function call is missing a thought_signature".
+    if (message.role === "assistant" && isGeminiContent(message.providerRaw)) {
+      contents.push(message.providerRaw);
+      continue;
+    }
     const parts: GeminiPart[] = [];
     for (const part of message.parts) {
       if (part.kind === "text") {
@@ -158,10 +176,14 @@ export class GeminiProvider implements ModelProvider {
 
     const parts = candidate.content.parts ?? [];
     const calls: ToolCall[] = [];
-    const message: Message = { role: "assistant", parts: [] };
+    // providerRaw carries the untouched response content, including the
+    // thoughtSignature fields the next request must echo back.
+    const message: Message = { role: "assistant", parts: [], providerRaw: candidate.content };
 
     for (const [index, part] of parts.entries()) {
-      if (part.text) message.parts.push({ kind: "text", text: part.text });
+      // Thinking summaries are not the model's answer; including them would
+      // corrupt the JSON the loop parses out of the final text.
+      if (part.text && !part.thought) message.parts.push({ kind: "text", text: part.text });
       if (part.functionCall) {
         const call: ToolCall = {
           id: synthesizeId(part.functionCall.name, index),

@@ -44,6 +44,21 @@ export type MessagePart =
 export interface Message {
   role: "user" | "assistant";
   parts: MessagePart[];
+  /**
+   * The provider's own representation of an assistant turn, kept verbatim so it
+   * can be replayed byte-for-byte on the next request.
+   *
+   * Canonical parts are a lowest common denominator, and some providers carry
+   * opaque fields that must survive the round trip. Gemini 3 attaches a
+   * `thoughtSignature` to each `functionCall` and rejects a follow-up request
+   * whose replayed call has lost it ("Function call is missing a
+   * thought_signature in functionCall parts"). Anthropic's thinking blocks
+   * carry a signature with the same requirement.
+   *
+   * Providers set this on responses they produce and prefer it over
+   * re-serialising `parts`. It is opaque to the agent loop.
+   */
+  providerRaw?: unknown;
 }
 
 /** Token accounting for a single provider call. */
