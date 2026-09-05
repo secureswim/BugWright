@@ -332,9 +332,27 @@ export async function runTask(taskId: string) {
 
       // Read the project's test layout before writing anything, so the
       // Reproducer is told where tests live rather than guessing.
-      const detected = parseToolJson<{ status: string; project?: { testConventions?: unknown } }>(
-        await mcp.call("TESTER", "runner", "select_project", { changedFiles: [] }, 0),
-      );
+      // Select the project from what research implicated, not from nothing.
+      // With an empty file list select_project falls back to an arbitrary
+      // project, so a two-project repository handed the Reproducer the
+      // conventions of whichever one sorted first - and it dutifully wrote a
+      // backend test for a frontend bug.
+      const researchFiles = [
+        ...new Set(
+          reports.flatMap((report) => [
+            ...report.relevantFiles,
+            ...report.relevantTests,
+            ...report.evidence.map((item) => item.path),
+          ]),
+        ),
+      ].filter(Boolean);
+      const detected = parseToolJson<{
+        status: string;
+        project?: { projectPath: string; testConventions?: Record<string, unknown> };
+      }>(await mcp.call("TESTER", "runner", "select_project", { changedFiles: researchFiles }, 0));
+      const conventions = detected.project
+        ? { ...detected.project.testConventions, projectPath: detected.project.projectPath }
+        : undefined;
       const produced = await reproducer(
         taskId,
         issue,
@@ -343,7 +361,7 @@ export async function runTask(taskId: string) {
         0,
         researchArtifacts,
         verify,
-        detected.project?.testConventions,
+        conventions,
       );
       reproduction = produced.report;
       researchArtifacts.push(produced.artifactId);

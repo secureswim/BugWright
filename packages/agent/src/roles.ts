@@ -568,7 +568,8 @@ export async function reproducer(
       "testConventions.importAliases when one applies - do not hand-count '../' segments, which is how " +
       "these tests usually fail to resolve. Paths you pass to write_test_file are relative to the " +
       "REPOSITORY root while testConventions is relative to the project, so prefix it with the project " +
-      "directory. You may only create test files: you cannot edit source, and you cannot " +
+      "directory - testConventions.projectPath tells you which one, and it is the project that contains " +
+      "the code under test. Do not put the test in a sibling project. You may only create test files: you cannot edit source, and you cannot " +
       "run anything. Assert the CORRECT behaviour so the test fails today and passes once the bug is fixed. " +
       "Do not modify or weaken any existing test. " +
       "Return ONLY JSON {reproduced,testPath,explanation,blockedReason?,confidence}. " +
@@ -843,7 +844,26 @@ export async function tester(
     /* ---- the reproduction test: is the bug fixed? ---- */
     let reproductionFixed: CheckStatus = "not-run";
     if (reproductionTestPath) {
-      const result = await call<RunnerResult>("run_test", { projectPath, only: reproductionTestPath });
+      // The reproduction test does not necessarily live in the project the
+      // patch touched: a monorepo fix can legitimately span projects, and the
+      // test has to run where its own runner can collect it. Resolving it from
+      // the test's own path rather than reusing the patch's project is what
+      // keeps "could not be run" from being reported as a verdict on the fix.
+      const reproSelection = await call<{ status: string; project?: DetectedProject }>("select_project", {
+        changedFiles: [reproductionTestPath],
+      });
+      const reproProject =
+        reproSelection.status === "selected" && reproSelection.project
+          ? reproSelection.project.projectPath
+          : projectPath;
+      if (reproProject !== projectPath) {
+        const prepared = await call<RunnerResult>("prepare_dependencies", { projectPath: reproProject });
+        await record(prepared);
+      }
+      const result = await call<RunnerResult>("run_test", {
+        projectPath: reproProject,
+        only: reproductionTestPath,
+      });
       await record(result);
       if (result.status !== "ran") {
         notConfigured.push(`reproduction: ${result.reason}`);
