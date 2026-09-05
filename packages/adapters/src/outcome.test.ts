@@ -146,3 +146,50 @@ describe("implicatesAnyFile", () => {
     expect(implicatesAnyFile("", ["src/a.ts"])).toBe(false);
   });
 });
+
+/**
+ * The failure this guards, verbatim from a real run.
+ *
+ * npm echoes the script it is about to run, and the scoping arguments are part
+ * of that echo. Matching against it made every lint run claim it had failed on
+ * a changed file, which sent the Coder to fix lint errors in files it had never
+ * touched, four revisions in a row, until the run was stopped.
+ */
+describe("implicatesAnyFile ignores the package manager's command echo", () => {
+  const realOutput = [
+    "",
+    "> vite_react_shadcn_ts@0.0.0 lint",
+    "> eslint . src/pages/Login.tsx",
+    "",
+    "",
+    "/workspace/frontend/src/components/ui/command.tsx",
+    "  24:11  error  An interface declaring no members is equivalent to its supertype",
+    "",
+    "/workspace/frontend/src/pages/Reports.tsx",
+    "  104:60   error  Unexpected any. Specify a different type",
+    "",
+    "/workspace/frontend/tailwind.config.ts",
+    "  104:13  error  A `require()` style import is forbidden",
+    "",
+    "✖ 32 problems (24 errors, 8 warnings)",
+  ].join("\n");
+
+  it("does not treat the echoed command as a diagnostic", () => {
+    expect(implicatesAnyFile(realOutput, ["src/pages/Login.tsx"])).toBe(false);
+  });
+
+  it("still sees a file that genuinely appears in the diagnostics", () => {
+    expect(implicatesAnyFile(realOutput, ["src/pages/Reports.tsx"])).toBe(true);
+  });
+
+  it("ignores a yarn-style echo too", () => {
+    const yarn = ["$ eslint . src/pages/Login.tsx", "", "src/pages/Other.tsx", "  1:1 error"].join("\n");
+    expect(implicatesAnyFile(yarn, ["src/pages/Login.tsx"])).toBe(false);
+    expect(implicatesAnyFile(yarn, ["src/pages/Other.tsx"])).toBe(true);
+  });
+
+  it("does not drop a diagnostic line that merely mentions >", () => {
+    const output = "src/a.ts\n  3:1  error  Expected a > b comparison";
+    expect(implicatesAnyFile(output, ["src/a.ts"])).toBe(true);
+  });
+});

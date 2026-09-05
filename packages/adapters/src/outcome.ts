@@ -65,8 +65,23 @@ export function detectTransformError(output: string): boolean {
  */
 export function implicatesAnyFile(output: string, projectRelativeFiles: string[]): boolean {
   if (!projectRelativeFiles.length || !output.trim()) return false;
-  const normalized = output.replaceAll("\\", "/");
-  return projectRelativeFiles.some((file) => file.length > 0 && normalized.includes(file));
+
+  // Drop the package manager's echo of the command it is about to run:
+  //
+  //   > vite_react_shadcn_ts@0.0.0 lint
+  //   > eslint . src/pages/Login.tsx
+  //
+  // Those lines contain the very paths that were appended to scope the command,
+  // so matching against them reports that a check "failed on a file this patch
+  // changed" whenever the file is merely named on the command line - which is
+  // always. npm and pnpm prefix with ">", yarn with "$".
+  const diagnostics = output
+    .replaceAll("\\", "/")
+    .split("\n")
+    .filter((line) => !/^\s*[>$]\s/.test(line))
+    .join("\n");
+
+  return projectRelativeFiles.some((file) => file.length > 0 && diagnostics.includes(file));
 }
 
 /**
