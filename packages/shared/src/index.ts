@@ -24,8 +24,8 @@ export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 export const taskStates = [
   "QUEUED",
   "PREPARING",
-  "PLANNING",
   "RESEARCHING",
+  "PLANNING",
   "REPRODUCING",
   "CODING",
   "TESTING",

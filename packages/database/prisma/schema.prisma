@@ -10,8 +10,8 @@ datasource db {
 enum TaskState {
   QUEUED
   PREPARING
-  PLANNING
   RESEARCHING
+  PLANNING
   REPRODUCING
   CODING
   TESTING

@@ -80,15 +80,28 @@ type Task = {
   agentRuns?: AgentRun[];
   managerPlan?: any;
   researchReport?: any;
+  reproductionReport?: any;
   patchProposal?: any;
   testReport?: any;
   reviewReport?: any;
 };
-type Health = { ok: boolean; database: boolean; docker: boolean; gemini: boolean; github: boolean };
+type Health = {
+  ok: boolean;
+  database: boolean;
+  docker: boolean;
+  gemini: boolean;
+  github: boolean;
+  models?: {
+    configured: Record<string, string>;
+    reviewerIndependent: boolean;
+    replaying: boolean;
+  };
+};
 const terminal = new Set(["COMPLETED", "FAILED", "REJECTED", "AWAITING_APPROVAL"]);
 const stages = [
   "PREPARING",
   "RESEARCHING",
+  "REPRODUCING",
   "CODING",
   "TESTING",
   "REVIEWING",
@@ -551,7 +564,7 @@ function TaskDetail({ id, onBack }: { id: string; onBack: () => void }) {
 }
 
 function AgentBoard({ runs }: { runs: AgentRun[] }) {
-  const roles = ["MANAGER", "RESEARCHER", "CODER", "TESTER", "REVIEWER"],
+  const roles = ["MANAGER", "RESEARCHER", "REPRODUCER", "CODER", "TESTER", "REVIEWER"],
     research = runs.filter((r) => r.role === "RESEARCHER");
   return (
     <div className="agentBoard">
@@ -599,11 +612,13 @@ function AgentBoard({ runs }: { runs: AgentRun[] }) {
                     ? "Plans and delegates"
                     : role === "RESEARCHER"
                       ? "Read-only diagnosis"
-                      : role === "CODER"
-                        ? "Scoped patching"
-                        : role === "TESTER"
-                          ? "Docker verification"
-                          : "Independent assessment")}
+                      : role === "REPRODUCER"
+                        ? "Writes a failing test"
+                        : role === "CODER"
+                          ? "Scoped patching"
+                          : role === "TESTER"
+                            ? "Sandboxed verification"
+                            : "Independent assessment")}
               </p>
               <footer>
                 <span>
@@ -621,8 +636,16 @@ function AgentBoard({ runs }: { runs: AgentRun[] }) {
 }
 function ReviewBrief({ task }: { task: Task }) {
   const research = task.researchReport,
+    reproduction = task.reproductionReport,
     patch = task.patchProposal,
+    tests = task.testReport,
     review = task.reviewReport;
+  const fixedLabel =
+    tests?.reproductionFixed === "passed"
+      ? "The test that failed before this patch now passes."
+      : tests?.reproductionFixed === "failed"
+        ? "The reproduction test still fails: the reported bug is not fixed."
+        : "No reproduction test was run.";
   return (
     <div className="brief">
       <Brief title="1. Original issue">
@@ -637,16 +660,40 @@ function ReviewBrief({ task }: { task: Task }) {
           </code>
         ))}
       </Brief>
-      <Brief title="3. Proposed implementation">
+      <Brief title="3. Reproduction">
+        {reproduction ? (
+          <>
+            <p>
+              {reproduction.reproduced
+                ? reproduction.explanation
+                : (reproduction.blockedReason ?? "The bug could not be reproduced.")}
+            </p>
+            <span className={`reviewDecision ${reproduction.reproduced ? "approve" : "reject"}`}>
+              {reproduction.reproduced
+                ? `reproduced by ${reproduction.testPath}`
+                : "not reproduced - no patch can be verified"}
+            </span>
+          </>
+        ) : (
+          <p>Pending</p>
+        )}
+      </Brief>
+      <Brief title="4. Proposed implementation">
         <p>{research?.proposedApproach ?? patch?.rationale ?? "Pending"}</p>
       </Brief>
-      <Brief title="4. Changed files">
+      <Brief title="5. Changed files">
         <p>{patch?.filesChanged?.join(", ") ?? "Pending"}</p>
       </Brief>
-      <Brief title="5. Test evidence">
-        <p>{task.testReport?.summary ?? "Pending"}</p>
+      <Brief title="6. Is the bug fixed?">
+        <p>{tests ? fixedLabel : "Pending"}</p>
       </Brief>
-      <Brief title="6. Independent reviewer">
+      <Brief title="7. Did anything break?">
+        <p>{tests?.summary ?? "Pending"}</p>
+        {tests?.notConfigured?.length ? (
+          <code>Not configured in this project: {tests.notConfigured.join(", ")}</code>
+        ) : null}
+      </Brief>
+      <Brief title="8. Independent reviewer">
         <p>{review?.reasoning ?? "Pending"}</p>
         {review && (
           <span className={`reviewDecision ${review.decision}`}>

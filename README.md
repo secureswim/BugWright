@@ -1,87 +1,253 @@
 # BugPilot
 
-BugPilot is a local-first, multi-agent software engineering system that turns a GitHub issue into a tested patch and, after human authorization, a draft pull request. Five agents have separate contexts, contracts, and permissions. All repository and execution operations use MCP.
+**Six agents, separated by authority. The one that writes the patch cannot run
+it, review it, or ship it.**
 
-## Architecture
+BugPilot turns a GitHub issue into a tested patch and, after human
+authorization, a draft pull request. The interesting part is not that a model
+can fix a bug — it is the boundaries around it: no patch is accepted until a
+test that **failed before it** passes after it, no agent can execute code it
+wrote, and a human approves a cryptographic fingerprint rather than a summary.
 
 ```mermaid
 flowchart TD
   U[GitHub issue] --> M[Manager]
   M --> R[Researcher · read only]
   R -->|ResearchReport| M
-  M --> C[Coder · patch only]
-  C -->|PatchProposal| M
-  M --> T[Tester · Docker only]
-  T -->|TestReport| M
-  T -->|failure| C
-  M --> V[Independent Reviewer · read only]
+  M --> P[Reproducer · writes tests only]
+  P -->|cannot reproduce| N[NEEDS_ATTENTION]
+  P -->|failing test, verified| C[Coder · patch only]
+  C --> S{Scope guard · deterministic}
+  S -->|unrelated files| C
+  S --> T[Tester · sandboxed]
+  T -->|repro still fails| C
+  T -->|regression fails| C
+  T -->|both green| V[Reviewer · fresh context, read only]
   V -->|reject| C
-  V -->|ReviewReport: approve| H[Human approval]
-  H -->|SHA-256 bound authorization| P[Deterministic GitHub publisher]
+  V -->|approve| H[Human approval]
+  H -->|SHA-256 bound authorization| G[Deterministic GitHub publisher]
 ```
 
-The Manager owns an explicit state machine and can launch implementation, test, and history research concurrently when dependencies allow it. Specialized agents never share hidden model history; they exchange validated JSON reports persisted as `AgentMessage` records. The Reviewer receives the issue, research report, diff, and tests in a fresh context, so the Coder cannot approve its own work.
+## The idea
 
-MCP provides the tool interface; the multi-agent layer provides delegation and reasoning. Repository, Git, Runner, and GitHub MCP processes are reused across roles while the policy layer applies a role/tool matrix before every call.
+Most "AI fixes your bug" systems are one model in a loop with different
+prompts. The failure mode is not that the model is bad at coding — it is that
+the same context investigates, changes, verifies, and approves its own work,
+and it is a poor judge of all four.
 
-## Agent boundaries
+BugPilot splits on **authority**, and enforces the split in code:
 
-| Role       | Input                              | Output                     | Capabilities                                |
-| ---------- | ---------------------------------- | -------------------------- | ------------------------------------------- |
-| Manager    | issue and reports                  | plan or next-role decision | orchestration only                          |
-| Researcher | issue, optional failure evidence   | `ResearchReport`           | bounded reads, search, history              |
-| Coder      | issue, research, revision evidence | `PatchProposal`            | bounded reads and exact-context patching    |
-| Tester     | issue and current diff             | `TestReport`               | fixed Docker test/typecheck/lint operations |
-| Reviewer   | issue, research, diff, tests       | `ReviewReport`             | bounded reads and Git inspection            |
+| Role | Input | Output | Capabilities |
+| --- | --- | --- | --- |
+| Manager | issue and reports | plan, next-role advice | orchestration only, **no tools at all** |
+| Researcher | issue, failure evidence | `ResearchReport` | bounded reads, search, history |
+| Reproducer | issue, research | `ReproductionReport` | reads, **writes test files only** |
+| Coder | issue, research, attempt log | `PatchProposal` | reads, exact-context patching |
+| Tester | issue, current diff | `TestReport` | fixed container operations only |
+| Reviewer | issue, research, diff, tests | `ReviewReport` | bounded reads, git inspection |
 
-The model never constructs shell commands. Runner operations map validated enums to fixed commands. The model never receives the Docker socket, Gemini key, GitHub credentials, or paths outside the task workspace.
+Each role connects to its **own** MCP server processes, started with a gate
+naming exactly the tools it may call. The Tester's repository server has no
+`read_file` to call; the Coder has no runner at all. An unauthorized call fails
+because the capability is absent, not because a guard refused it.
+
+The model never constructs a shell command. Language adapters build every
+`argv`; the model supplies an enumerated operation and a project path that
+detection already returned.
+
+## Why the reproduction step exists
+
+This is the part worth reading if you read nothing else.
+
+A bug exists *because* no test catches it. So on a real repository the existing
+suite passes before a patch and passes after it — a green test run means only
+**"nothing else broke."** It says nothing about whether the reported bug was
+fixed.
+
+BugPilot therefore writes a failing test first, and verifies that it actually
+fails:
+
+- The Reproducer proposes a test but **cannot execute anything**. The
+  orchestrator runs it through the Tester's authority, so a `reproduced: true`
+  claim is overwritten by the observed exit code.
+- A test that **passes** before the fix means the diagnosis was wrong. The run
+  stops and says so, before any code is written.
+- If nothing assertable can be written, the run stops. **That is a correct
+  outcome**, and `fixtures/no-repro` exists to keep it honest.
+
+`TestReport` then answers two separate questions — *is the bug fixed?* and
+*did anything break?* — and a patch whose reproduction test still fails is
+never approved, however green the suite is.
+
+See [ADR 6](docs/decisions/0006-reproduce-before-fixing.md).
+
+## Supported repositories
+
+| | |
+| --- | --- |
+| **Languages** | Node.js / TypeScript, Python. Reading and patching are language-agnostic; verification needs an adapter. |
+| **Hosting** | Public HTTPS GitHub repositories. No SSH, GitLab, or self-hosted. |
+| **Tests** | Must run offline. Test containers get no network; only dependency installation does. |
+| **Layout** | Monorepos supported; detection recurses with a depth cap. |
+| **History** | Shallow clone, so `get_history` sees limited history. |
+
+A repository in an unsupported language is reported as such rather than
+silently failing: BugPilot will read and patch it but refuses to claim it
+verified anything.
+
+Adding a language is one `LanguageAdapter` and one container image — see
+[ADR 5](docs/decisions/0005-language-adapters-and-deterministic-replay.md).
+
+## Models
+
+Any of Gemini, Anthropic, or OpenAI, configured per role:
+
+```bash
+BUGPILOT_MODEL=gemini                                   # default for every role
+BUGPILOT_MODEL_RESEARCHER=gemini:gemini-3.5-flash-lite  # cheap, three run in parallel
+BUGPILOT_MODEL_CODER=gemini:gemini-3.5-pro
+BUGPILOT_MODEL_REVIEWER=anthropic:claude-sonnet-4-20250514
+```
+
+That last line is not only about quality. Two instances of the same model share
+failure modes, so a same-family reviewer is disproportionately blind to exactly
+the mistakes the Coder just made. Running the Reviewer on a **different model
+family** makes review independence a property of the system rather than a hope.
+`GET /metrics` reports whether it is actually configured.
+
+Providers are stateless: turns, tool dispatch, budgets, retries, and context
+compaction live in one provider-independent loop, so a new vendor is about
+eighty lines. See
+[ADR 4](docs/decisions/0004-model-providers-behind-an-agent-loop.md).
 
 ## Stack
 
-- Next.js 15, React 19, TypeScript
-- Fastify API and Server-Sent Events
-- PostgreSQL 17, Prisma, pg-boss
-- Gemini through the `AgentModel` interface
-- Official MCP TypeScript SDK with stdio servers
-- Docker Desktop sandbox
-- GitHub App or fine-grained token for publishing
+Next.js 15 · React 19 · TypeScript · Fastify with SSE · PostgreSQL 17 · Prisma
+· pg-boss · the official MCP TypeScript SDK over stdio · Docker · GitHub App or
+fine-grained token for publishing.
 
-## Run locally
+## Run it
 
-Docker Desktop is required and the repository includes a local-only PostgreSQL binding.
+Docker is required. PostgreSQL and the API bind to `127.0.0.1`.
 
-```powershell
-Copy-Item .env.example .env
-# Add GEMINI_API_KEY to .env
+```bash
+cp .env.example .env          # add one model API key
 npm install
 npm run db:generate
 docker compose up -d postgres
-docker build -t bugpilot-runner:latest -f docker/runner.Dockerfile .
+docker build -t bugpilot-runner-node:latest   -f docker/runner.node.Dockerfile   .
+docker build -t bugpilot-runner-python:latest -f docker/runner.python.Dockerfile .
 npm run db:push
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`, then select **Try the built-in demo fixture**. The flow stops at human approval. Add either a fine-grained `GITHUB_TOKEN` or GitHub App credentials only when testing draft-PR publishing.
+Open `http://127.0.0.1:3000` and choose **Try the built-in demo fixture**. The
+run stops at the human approval gate. Add a GitHub token only when you want to
+test draft-PR publishing.
 
-## Safety and recovery
-
-- PostgreSQL and Fastify bind to `127.0.0.1` by default.
-- Each repository gets a resolved task-specific workspace.
-- Protected paths, traversal, ambiguous patches, and role violations are rejected deterministically.
-- Tests run as UID 10001 with no capabilities, no-new-privileges, two CPUs, 2 GB memory, 256 processes, a five-minute timeout, and no network.
-- Test and revision counts are bounded. Exhausted tasks enter `NEEDS_ATTENTION`.
-- Agent runs, messages, reports, tool calls, states, and evidence are persisted. The worker requeues interrupted nonterminal tasks on restart.
-- Failed runs expose **Resume from checkpoint**. BugPilot selects the latest valid persisted stage instead of repeating completed model work or tests. An approved publish retry revalidates the exact approval hash before it creates a branch or draft PR.
-- Human approval hashes the repository, target branch, base commit, complete diff, and test evidence. A changed artifact invalidates authorization.
-
-## Verification
+<details>
+<summary>PowerShell</summary>
 
 ```powershell
+Copy-Item .env.example .env
+npm install; npm run db:generate
+docker compose up -d postgres
+docker build -t bugpilot-runner-node:latest -f docker/runner.node.Dockerfile .
+docker build -t bugpilot-runner-python:latest -f docker/runner.python.Dockerfile .
+npm run db:push; npm run dev
+```
+
+</details>
+
+## Verify
+
+```bash
+npm run format:check
+npm run lint
 npm run typecheck
-npm test
+npm test                      # 157 tests, no API key needed
 npm run build -w @bugpilot/web
 ```
 
-Tasks carry an `executionMode` field so the same persistence and metrics schema can compare `MULTI_AGENT` with a future `SINGLE_AGENT` baseline. The baseline runner is intentionally not enabled yet; this avoids disguising the multi-agent path as a baseline. The evaluation endpoint at `GET /metrics` reports resolution, regression, first-attempt success, delegation, role success, revision, safety, tool-call, and context-size metrics from persisted runs.
+The suite runs offline. `FakeProvider` scripts model turns for unit tests, and
+`ReplayProvider` replays a recorded cassette so the orchestrator itself can be
+exercised in CI with no key and no network:
 
-See [architecture.md](docs/architecture.md) for state transitions and interview-ready design decisions.
+```bash
+BUGPILOT_RECORD=1 npm run demo    # capture once
+BUGPILOT_REPLAY=1 npm test        # replay forever, free
+```
+
+## Safety
+
+- **Authority is structural.** Per-role MCP servers register only that role's
+  tools. No role has any GitHub tool; publishing is ordinary backend code
+  behind the human gate.
+- **Credentials are scoped per server.** The repository and runner servers
+  receive `BUGPILOT_REPO_ROOT` and nothing else — not the model key, not the
+  GitHub token, not `DATABASE_URL`.
+- **The state machine overrides the model.** A reviewer rejection can never
+  become an approval, from any state, for any model suggestion. Tested
+  exhaustively over every decision a compromised Manager could return.
+- **Tests are sandboxed.** UID 10001, `--cap-drop ALL`, no new privileges, no
+  network, 2 CPUs, 2 GB, 256 PIDs, five-minute timeout, and the workspace
+  mounted **read-only** with a tmpfs overlay — so a hostile test suite cannot
+  rewrite the source under review or the `.git` directory.
+- **Protected paths cover the supply chain.** `.github/workflows/`, CI configs,
+  Dockerfiles, and lockfiles are unwritable; `package.json` stays editable but
+  `scripts`, `bin`, and `gypfile` are not, because those execute on whoever
+  merges the pull request.
+- **A deterministic scope guard** compares changed files against the researched
+  surface before a test run is spent. It is ordinary code, so the agent whose
+  patch it checks cannot argue with it.
+- **Approval binds an artifact.** The hash covers repository, branch, base
+  commit, complete diff, and every test run's output. One changed byte
+  invalidates it, and a publish retry revalidates before touching GitHub.
+- **Publishing is idempotent.** One tree, one commit, one ref update through
+  the Git Data API; an existing branch and open PR are reused, so a retried job
+  cannot half-write a branch or open a duplicate.
+
+Prompt injection is treated as something that *will* sometimes succeed, so the
+controls above do not depend on the model refusing it — see
+[docs/threat-model.md](docs/threat-model.md), and `fixtures/injection-issue`
+for an end-to-end attempt with its expected outcome recorded in the fixture.
+
+## Recovery
+
+Every run, message, report, tool call, state change, and piece of evidence is
+persisted. The worker requeues interrupted non-terminal tasks on restart, and a
+stopped task offers **Resume from checkpoint**: BugPilot picks the latest
+*valid* persisted stage rather than repeating completed model work and test
+runs. A stage only counts as complete if its whole artifact set is present — a
+patch with no diff is not a finished coding stage, and a green suite whose
+reproduction test still failed is not a verified test stage.
+
+## Evaluation
+
+`GET /metrics` computes everything from persisted runs. The number to read
+first is **`soundness.verifiedFixRate`**: the share of completed tasks where a
+test that failed before the patch passed after it. Anything below 1 means some
+completions rest only on "nothing else broke".
+
+`efficiency` reports real input and output tokens, cost per resolved issue, and
+peak context per role measured across the whole conversation including tool
+results — not the size of the opening payload.
+
+Tasks carry an `executionMode` so the same schema can compare `MULTI_AGENT`
+against a `SINGLE_AGENT` baseline. **That baseline is not implemented yet, so
+no performance claim is made here.** Presenting the multi-agent path as if it
+had been measured against one would be the easiest way to make this project
+dishonest. The protocol for running that comparison is in
+[evaluations/README.md](evaluations/README.md).
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — states, transitions, and how
+  the pieces fit
+- [docs/threat-model.md](docs/threat-model.md) — adversaries, controls, and the
+  gaps that are still open
+- [docs/decisions/](docs/decisions/) — ADRs, including why five roles became
+  six and why the state machine overrides the model
+- [evaluations/README.md](evaluations/README.md) — the measurement protocol
+- [fixtures/README.md](fixtures/README.md) — the corpus, including the two
+  fixtures where the correct behaviour is to **refuse**

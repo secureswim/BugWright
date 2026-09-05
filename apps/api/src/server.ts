@@ -9,7 +9,7 @@ import { db } from "@bugpilot/database";
 import { evaluationMetrics } from "@bugpilot/evaluation";
 import { createTaskSchema } from "@bugpilot/shared";
 import { approvalHash, parseGitHubRepository } from "@bugpilot/policy";
-import { McpTools } from "@bugpilot/agent";
+import { McpTools, reviewerIsIndependent } from "@bugpilot/agent";
 import { resumeCheckpoint } from "./resume.js";
 
 const app = Fastify({ logger: true });
@@ -22,6 +22,22 @@ await boss.createQueue("run-task");
 await boss.createQueue("publish-task");
 const json = (value: unknown) =>
   JSON.parse(JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v)));
+
+/** Which provider each model-using role is configured to reach, for /health. */
+function modelHealth() {
+  const roles = ["MANAGER", "RESEARCHER", "REPRODUCER", "CODER", "REVIEWER"] as const;
+  const configured = Object.fromEntries(
+    roles.map((role) => [
+      role,
+      process.env[`BUGPILOT_MODEL_${role}`] ?? process.env.BUGPILOT_MODEL ?? "gemini",
+    ]),
+  );
+  return {
+    configured,
+    reviewerIndependent: reviewerIsIndependent(),
+    replaying: process.env.BUGPILOT_REPLAY === "1",
+  };
+}
 
 async function dockerAvailable() {
   return await new Promise<boolean>((resolve) => {
@@ -46,6 +62,7 @@ app.get("/health", async () => {
     ok: database,
     database,
     docker: await dockerAvailable(),
+    models: modelHealth(),
     gemini: Boolean(process.env.GEMINI_API_KEY),
     github: Boolean(
       process.env.GITHUB_TOKEN ||
@@ -98,7 +115,7 @@ app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => 
     if (!task.workspacePath || !task.baseCommit || !task.diff || !task.approvalHash)
       return reply.code(409).send({ error: "The approved review package is incomplete" });
     const mcp = new McpTools(task.id, task.workspacePath);
-    await mcp.connect(["git"]);
+    await mcp.connect(["git"], ["REVIEWER"]);
     let currentDiff = "";
     try {
       const raw = await mcp.callTrusted("git", "get_diff");
@@ -189,7 +206,7 @@ app.post<{ Params: { id: string }; Body: { decision?: string; note?: string } }>
     if (!task.workspacePath || !task.baseCommit || !task.diff || !task.approvalHash)
       return reply.code(409).send({ error: "Review package is incomplete" });
     const mcp = new McpTools(task.id, task.workspacePath);
-    await mcp.connect(["git"]);
+    await mcp.connect(["git"], ["REVIEWER"]);
     let currentDiff = "";
     try {
       const raw = await mcp.callTrusted("git", "get_diff");

@@ -1,0 +1,9 @@
+[project]
+name = "date-range"
+version = "0.1.0"
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
