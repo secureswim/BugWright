@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   approvalHash,
@@ -35,7 +36,21 @@ describe("repository URL parsing", () => {
 
 describe("path containment", () => {
   it("resolves a path inside the workspace", () => {
-    expect(resolveInside("/work/task", "src/a.ts")).toBe("/work/task/src/a.ts");
+    // Asserted as a property rather than a literal: path.resolve is
+    // platform-specific (on Windows "/work/task" becomes "C:\\work\\task"),
+    // and what matters here is that the result lands under the root - not how
+    // the host spells it.
+    const root = path.resolve("/work/task");
+    const resolved = resolveInside("/work/task", "src/a.ts");
+    expect(resolved).toBe(path.join(root, "src", "a.ts"));
+    expect(resolved.startsWith(root + path.sep)).toBe(true);
+  });
+
+  it("resolves a nested path inside the workspace", () => {
+    const root = path.resolve("/work/task");
+    expect(resolveInside("/work/task", "src/deep/nested/file.ts")).toBe(
+      path.join(root, "src", "deep", "nested", "file.ts"),
+    );
   });
 
   it.each(["../outside.ts", "../../etc/passwd", "/etc/passwd", "src/../../escape.ts"])(

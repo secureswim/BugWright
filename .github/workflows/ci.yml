@@ -6,7 +6,32 @@ on:
   pull_request:
 
 jobs:
+  # Runs on both platforms on purpose. BugPilot is developed on Windows and
+  # deployed on Linux, and it spawns processes, resolves paths and shells out
+  # to git and docker - all places the two differ. An Ubuntu-only matrix let a
+  # path-resolution test that hardcoded POSIX separators pass in CI and fail on
+  # the machine it was written on.
   verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run db:generate
+      - run: npm run typecheck
+      - run: npm test
+
+  # Formatting, linting and the web build are platform-independent, so they run
+  # once rather than twice.
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,8 +43,6 @@ jobs:
       - run: npm run db:generate
       - run: npm run format:check
       - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
       - run: npm run build -w @bugpilot/web
 
   docker:
