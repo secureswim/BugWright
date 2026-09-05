@@ -21,6 +21,56 @@ const dockerBin = process.env.BUGPILOT_DOCKER_BIN ?? "docker";
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
 
+/** The unprivileged user the runner images execute as. */
+const RUNNER_UID = "10001";
+
+/** Cache volumes already known to be writable by that user, per server process. */
+const preparedVolumes = new Set<string>();
+
+/**
+ * Make a named cache volume writable by the unprivileged runner user.
+ *
+ * Docker seeds a named volume from the image when the mount point exists there,
+ * preserving its ownership - which is why `/workspace/node_modules` works: the
+ * Dockerfile creates and chowns it. A project nested inside the repository
+ * mounts at `/workspace/<project>/node_modules`, a path no image can know in
+ * advance, so Docker creates an empty volume owned by root and the install
+ * fails with EACCES the moment it tries to write.
+ *
+ * A short root container fixes the ownership once per volume. Nothing from the
+ * repository under test runs in it: no workspace mount, no network, a fixed
+ * argv, and only the volume attached.
+ */
+async function prepareVolume(image: string, volume: string, containerPath: string): Promise<void> {
+  if (preparedVolumes.has(volume)) return;
+  preparedVolumes.add(volume);
+  await new Promise<void>((resolve) => {
+    const child = spawn(
+      dockerBin,
+      [
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--network",
+        "none",
+        "-v",
+        `${volume}:${containerPath}`,
+        image,
+        "chown",
+        "-R",
+        `${RUNNER_UID}:${RUNNER_UID}`,
+        containerPath,
+      ],
+      { windowsHide: true, shell: false },
+    );
+    // Best effort: if this fails the real command still runs and reports the
+    // permission error itself, which is more informative than failing here.
+    child.on("error", () => resolve());
+    child.on("close", () => resolve());
+  });
+}
+
 /**
  * The model supplies an operation and a project path that detection already
  * returned. It never supplies a command, an image, a mount, or a flag. Every
@@ -31,6 +81,13 @@ async function run(project: DetectedProject, command: CommandSpec, readOnly: boo
   const adapter = adapterFor(project.adapter);
   const workdir = command.projectPath === "." ? "/workspace" : `/workspace/${command.projectPath}`;
   const scope = createHash("sha256").update(`${root}\0${command.projectPath}`).digest("hex").slice(0, 20);
+  const mounts = adapter
+    .cacheMounts(project)
+    .map((mount) => ({ volume: `bugpilot-${mount.key}-${scope}`, containerPath: mount.containerPath }));
+
+  for (const mount of mounts) {
+    await prepareVolume(adapter.image, mount.volume, mount.containerPath);
+  }
 
   const args = [
     "run",
@@ -54,9 +111,7 @@ async function run(project: DetectedProject, command: CommandSpec, readOnly: boo
     "-v",
     `${root}:/workspace${readOnly ? ":ro" : ""}`,
     ...(readOnly ? ["--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"] : []),
-    ...adapter
-      .cacheMounts(project)
-      .flatMap((mount) => ["-v", `bugpilot-${mount.key}-${scope}:${mount.containerPath}`]),
+    ...mounts.flatMap((mount) => ["-v", `${mount.volume}:${mount.containerPath}`]),
     "-w",
     workdir,
     adapter.image,
