@@ -9,6 +9,7 @@ import {
   environmentForServer,
   serversForRole,
   toolsForRole,
+  assertReproductionEditable,
 } from "@bugwright/policy";
 import { projectRoot } from "./runtime.js";
 
@@ -55,6 +56,19 @@ export class McpTools {
   private clients = new Map<string, Client>();
   private readonly taskId: string;
   private readonly repoRoot: string;
+  private protectedTest?: string;
+
+  async protectReproduction(testPath: string) {
+    this.protectedTest = testPath;
+    for (const role of TOOL_ROLES) {
+      const key = clientKey(role, "repository");
+      const client = this.clients.get(key);
+      if (!client) continue;
+      await client.close();
+      this.clients.delete(key);
+      await this.start(role, "repository", toolsForRole(role, "repository"));
+    }
+  }
 
   constructor(taskId: string, repoRoot: string) {
     this.taskId = taskId;
@@ -92,6 +106,7 @@ export class McpTools {
       args: ["--require", path.join(root, "scripts", "windows-user-shim.cjs"), "--import", "tsx", source],
       env: environmentForServer(server, process.env, {
         BUGWRIGHT_REPO_ROOT: this.repoRoot,
+        ...(this.protectedTest ? { BUGWRIGHT_PROTECTED_TEST: this.protectedTest } : {}),
         ...(tools ? { BUGWRIGHT_ALLOWED_TOOLS: tools.join(",") } : {}),
       }),
     };
@@ -114,6 +129,9 @@ export class McpTools {
   ) {
     try {
       assertToolAllowed(role, server, name);
+      if (server === "repository" && ["apply_patch", "write_test_file"].includes(name)) {
+        assertReproductionEditable(String(args.path), this.protectedTest);
+      }
     } catch (error) {
       await db.taskEvent.create({
         data: {

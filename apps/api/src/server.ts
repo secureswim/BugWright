@@ -8,8 +8,8 @@ import { spawn } from "node:child_process";
 import { db } from "@bugwright/database";
 import { evaluationMetrics } from "@bugwright/evaluation";
 import { createTaskSchema } from "@bugwright/shared";
-import { approvalHash, parseGitHubRepository } from "@bugwright/policy";
-import { McpTools, reviewerIsIndependent } from "@bugwright/agent";
+import { parseGitHubRepository } from "@bugwright/policy";
+import { validateReviewPackage, reviewerIsIndependent } from "@bugwright/agent";
 import { resumeCheckpoint } from "./resume.js";
 
 const app = Fastify({ logger: true });
@@ -170,7 +170,7 @@ app.post("/tasks", async (req, reply) => {
   await db.taskEvent.create({
     data: { taskId: task.id, type: "TASK_CREATED", title: "Task queued for BugWright" },
   });
-  await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
+  await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 3, retryDelay: 5 });
   return reply.code(201).send(json(task));
 });
 app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => {
@@ -186,33 +186,11 @@ app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => 
   if (approval?.decision === "APPROVED" && approval.hash === task.approvalHash && task.approvedAt) {
     if (!task.workspacePath || !task.baseCommit || !task.diff || !task.approvalHash)
       return reply.code(409).send({ error: "The approved review package is incomplete" });
-    const mcp = new McpTools(task.id, task.workspacePath);
-    await mcp.connect(["git"], ["REVIEWER"]);
-    let currentDiff = "";
     try {
-      const raw = await mcp.callTrusted("git", "get_diff");
-      currentDiff = (JSON.parse(raw) as { stdout: string }).stdout;
-    } finally {
-      await mcp.close();
+      await validateReviewPackage(task);
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
     }
-    const expected = approvalHash({
-      taskId: task.id,
-      repository: task.repositoryUrl,
-      targetBranch: task.baseBranch,
-      baseCommit: task.baseCommit,
-      diff: currentDiff,
-      tests: task.testRuns.map((t) => ({
-        command: t.command,
-        exitCode: t.exitCode,
-        stdout: t.stdout,
-        stderr: t.stderr,
-        durationMs: t.durationMs,
-      })),
-    });
-    if (expected !== approval.hash)
-      return reply
-        .code(409)
-        .send({ error: "The approved diff or evidence changed; a fresh review is required" });
     await db.$transaction([
       db.task.update({
         where: { id: task.id },
@@ -222,10 +200,22 @@ app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => 
         data: { taskId: task.id, type: "TASK_RESUMED", title: "Resumed from approved publishing checkpoint" },
       }),
     ]);
-    await boss.send("publish-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
+    await boss.send(
+      "publish-task",
+      { taskId: task.id },
+      { singletonKey: task.id, retryLimit: 3, retryDelay: 5 },
+    );
     return { ok: true, resumeFrom: "PUBLISHING" };
   }
   const next = resumeCheckpoint(task);
+  if (next === "REVIEWING" || next === "AWAITING_HUMAN_APPROVAL") {
+    try {
+      // Only the human-gate path has a completed review to validate.
+      if (next === "AWAITING_HUMAN_APPROVAL") await validateReviewPackage(task);
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
   await db.$transaction([
     db.task.update({
       where: { id: task.id },
@@ -245,7 +235,7 @@ app.post<{ Params: { id: string } }>("/tasks/:id/resume", async (req, reply) => 
     }),
   ]);
   if (next !== "AWAITING_HUMAN_APPROVAL")
-    await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
+    await boss.send("run-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 3, retryDelay: 5 });
   return { ok: true, resumeFrom: next };
 });
 app.post<{ Params: { id: string }; Body: { decision?: string; note?: string } }>(
@@ -278,33 +268,12 @@ app.post<{ Params: { id: string }; Body: { decision?: string; note?: string } }>
     }
     if (!task.workspacePath || !task.baseCommit || !task.diff || !task.approvalHash)
       return reply.code(409).send({ error: "Review package is incomplete" });
-    const mcp = new McpTools(task.id, task.workspacePath);
-    await mcp.connect(["git"], ["REVIEWER"]);
-    let currentDiff = "";
+    let expected: string;
     try {
-      const raw = await mcp.callTrusted("git", "get_diff");
-      currentDiff = (JSON.parse(raw) as { stdout: string }).stdout;
-    } finally {
-      await mcp.close();
+      expected = (await validateReviewPackage(task)).hash;
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : String(error) });
     }
-    const expected = approvalHash({
-      taskId: task.id,
-      repository: task.repositoryUrl,
-      targetBranch: task.baseBranch,
-      baseCommit: task.baseCommit,
-      diff: currentDiff,
-      tests: task.testRuns.map((t) => ({
-        command: t.command,
-        exitCode: t.exitCode,
-        stdout: t.stdout,
-        stderr: t.stderr,
-        durationMs: t.durationMs,
-      })),
-    });
-    if (expected !== task.approvalHash)
-      return reply
-        .code(409)
-        .send({ error: "The diff or evidence changed after review. Run the task again." });
     await db.$transaction([
       db.approval.create({
         data: { taskId: task.id, hash: expected, decision: "APPROVED", note: req.body.note },
@@ -319,7 +288,11 @@ app.post<{ Params: { id: string }; Body: { decision?: string; note?: string } }>
         },
       }),
     ]);
-    await boss.send("publish-task", { taskId: task.id }, { singletonKey: task.id, retryLimit: 0 });
+    await boss.send(
+      "publish-task",
+      { taskId: task.id },
+      { singletonKey: task.id, retryLimit: 3, retryDelay: 5 },
+    );
     return { ok: true };
   },
 );

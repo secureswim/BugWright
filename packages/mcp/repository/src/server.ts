@@ -13,6 +13,7 @@ import {
   toolGate,
 } from "@bugwright/policy";
 import { validateTestExtension } from "@bugwright/adapters";
+import { assertReproductionEditable } from "@bugwright/policy";
 
 const root = path.resolve(process.env.BUGWRIGHT_REPO_ROOT ?? "");
 if (!process.env.BUGWRIGHT_REPO_ROOT) throw new Error("BUGWRIGHT_REPO_ROOT is required");
@@ -66,7 +67,7 @@ async function fallbackSearch(query: string, glob?: string) {
     if (files >= 2000 || chars >= 60_000) return;
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (IGNORED.includes(entry.name)) continue;
-      const absolute = path.join(directory, entry.name);
+      const absolute = resolveInside(root, path.relative(root, path.join(directory, entry.name)));
       const relative = path.relative(root, absolute).replaceAll("\\", "/");
       if (entry.isDirectory()) {
         await walk(absolute);
@@ -103,7 +104,7 @@ if (allowed("list_tree")) {
         if (level > depth || found.length >= 2000) return;
         for (const entry of await readdir(directory, { withFileTypes: true })) {
           if (IGNORED.includes(entry.name)) continue;
-          const absolute = path.join(directory, entry.name);
+          const absolute = resolveInside(root, path.relative(root, path.join(directory, entry.name)));
           const relative = path.relative(root, absolute).replaceAll("\\", "/");
           found.push(relative + (entry.isDirectory() ? "/" : ""));
           if (entry.isDirectory()) await walk(absolute, level + 1);
@@ -190,6 +191,7 @@ if (allowed("apply_patch")) {
     },
     async ({ path: requested, oldText, newText }) => {
       const safe = assertEditable(requested);
+      assertReproductionEditable(safe, process.env.BUGWRIGHT_PROTECTED_TEST);
       const absolute = resolveInside(root, safe);
       const content = await readFile(absolute, "utf8");
 
@@ -224,6 +226,7 @@ if (allowed("write_test_file")) {
       // Enforced here as well as in the client: the Reproducer's authority is
       // to write tests, and nothing about a model's output can widen it.
       const safe = assertTestPath(requested);
+      assertReproductionEditable(safe, process.env.BUGWRIGHT_PROTECTED_TEST);
       // A .ts file containing JSX cannot be parsed by any of the toolchains
       // that would run it, and it fails identically before and after a patch -
       // indistinguishable from a bug that will not go away. Rejecting it here

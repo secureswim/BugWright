@@ -123,6 +123,7 @@ export type CheckStatus = "passed" | "failed" | "advisory" | "not-configured" | 
  * patch and after it, so a green run said nothing at all about the fix.
  */
 export interface TestReport {
+  artifactHash?: string;
   passed: boolean;
   reproductionFixed: CheckStatus;
   regression: CheckStatus;

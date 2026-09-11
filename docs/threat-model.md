@@ -50,9 +50,9 @@ sometimes succeeds and makes success useless.
   requesting `HUMAN_APPROVAL` from a failing or rejected state is discarded.
   This is exhaustively tested in `state-machine.test.ts` — including a case
   that iterates every decision a compromised Manager could return.
-- Publishing requires a persisted `Approval` row whose SHA-256 matches the
-  current diff and test evidence. No agent can write that row; it comes from
-  the HTTP approval endpoint.
+- Publishing requires a persisted `Approval` row whose SHA-256 binds the
+  versioned artifact, destination, and exact test evidence. No agent can write
+  that row; it comes from the HTTP approval endpoint.
 - Every role's system prompt states that issue text and file contents are
   untrusted data, and that an instruction found there is evidence to report
   rather than a directive. This is the mitigation layer, deliberately placed
@@ -118,16 +118,18 @@ bundles a TypeScript config to a temp file beside it before importing, so
 prevents the product from working on its target repositories is not a control.
 
 What the read-only mount was protecting against - a hostile test suite
-rewriting the source so the approved diff is not the tested diff - is now
-**detected** rather than prevented: the orchestrator captures the diff before
-and after each test run and stops with `WORKSPACE_TAMPERED` if the tree
-changed. That is weaker in one way (the write happens before it is caught) and
-stronger in another (it catches mutation by any route, not only direct writes
-to the mount). `BUGWRIGHT_RUNNER_READONLY=1` restores the strict mount for
-repositories that tolerate it.
+rewriting the source so the approved artifact is not what was tested - is now
+**detected** rather than prevented. The Tester recomputes the complete source
+artifact before and after every runner call; any changed raw byte, executable
+mode, addition, or deletion invalidates verification. `BUGWRIGHT_RUNNER_READONLY=1`
+restores the strict mount for repositories that tolerate it.
 
-**Residual risk.** Container escape. Docker is a boundary, not a sandbox in the
-gVisor sense. Do not point BugWright at a repository you would not clone.
+**Residual risk.** A malicious process that changes a source file and restores
+the exact bytes between checks is not observable without stronger filesystem
+isolation. Snapshot capture is also not an operating-system atomic snapshot.
+Container escape remains in scope as a risk: Docker is a boundary, not a
+sandbox in the gVisor sense. Do not point BugWright at a repository you would
+not clone.
 
 ### 5. Privilege escalation between agents
 
@@ -157,10 +159,11 @@ or `DATABASE_URL`. Asserted directly in `policy/index.test.ts`.
 **Attack.** The model requests `../../etc/passwd`, an absolute path, or a
 symlinked path.
 
-**Control.** `assertSafeRelativePath` rejects absolute paths, `..`, and NUL
-bytes; `resolveInside` re-resolves against the workspace root and rejects
-anything that lands outside it, including a sibling directory sharing a name
-prefix. Every path from a model passes through both.
+**Control.** `assertSafeRelativePath` rejects absolute paths, traversal,
+backslashes, control characters, and Windows drive/stream separators.
+`resolveInside` checks every existing path component with `lstat` and rejects
+symbolic links and junctions as well as lexical escapes. Artifact capture also
+rejects Git symlinks, submodules, and hardlinked source files.
 
 ### 8. Approval-integrity attacks
 
@@ -168,11 +171,20 @@ prefix. Every path from a model passes through both.
 racing the approval, resuming a stale task, or letting a test rewrite the
 workspace after review.
 
-**Controls.** The approval hash covers the task, repository, target branch,
-base commit, complete diff, and every test run's command, exit code and output.
-It is recomputed from the live workspace at approval time and again on any
-publish retry; a mismatch refuses to publish. A single changed byte invalidates
-it, which is tested explicitly.
+**Controls.** Verification creates a versioned artifact from raw working-tree
+bytes without touching the user's index or applying Git clean/smudge filters.
+It covers the base commit, complete source manifest, file modes, additions,
+deletions, binary data, full diff, and the protected reproduction proof. The
+approval hash then binds that artifact to the task, repository, target branch,
+and exact baseline/verification test records. Approval and publication both
+recompute the live artifact. Publication uploads only the captured bytes and
+checks the tree returned by GitHub before creating a commit.
+
+The failing reproduction is recorded before coding and becomes a protected
+path in both the MCP client and repository server. Approval requires evidence
+that this exact test failed against its baseline artifact and passed against
+the reviewed artifact. Details and format limits are in
+[`artifact-integrity.md`](artifact-integrity.md).
 
 ### 9. The agent that certifies its own work
 
@@ -192,6 +204,25 @@ depend on two instances of one model having uncorrelated blind spots.
 **Control.** Bounded revisions, test attempts, agent runs, model calls, and
 wall-clock time per task, checked every loop iteration. Tool results are
 compacted rather than allowed to grow context without limit.
+
+### 11. Duplicate and stale workers
+
+**Attack.** A queue job is delivered twice, a paused worker continues after
+another process takes over, or a process crashes between a GitHub side effect
+and its local database update.
+
+**Controls.** Execution and publication require a renewable PostgreSQL lease.
+Every claim increments a generation used as a fencing token; task writes and
+tool calls verify the owner, generation, and expiry. Startup reconciliation
+only considers absent or expired leases. Recovery restores and revalidates the
+latest immutable artifact before continuing. Publication checkpoints remote
+progress under a unique idempotency key and accepts an existing branch only
+when its commit tree and parent match the approved artifact.
+
+**Residual risk.** GitHub object creation and PostgreSQL cannot share one
+transaction. A crash before a new commit SHA is persisted and before a branch
+references it can leave an unreachable duplicate Git object on retry. Branch
+and pull-request identity remain deterministic.
 
 ## Known gaps
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { lstatSync } from "node:fs";
 
 export function parseGitHubRepository(url: string) {
   const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(url);
@@ -13,15 +14,45 @@ export function resolveInside(root: string, candidate: string) {
   if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
     throw new Error("Path escapes the task workspace");
   }
+  // Check every existing component, including the workspace itself. Lexical
+  // containment alone permits directory symlinks/junctions to escape the root.
+  let current = path.parse(resolved).root;
+  for (const part of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) throw new Error("Symlink paths are unsupported");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   return resolved;
 }
 
 export function assertSafeRelativePath(value: string) {
-  if (!value || path.isAbsolute(value) || value.includes("..") || value.includes("\0")) {
+  if (
+    !value ||
+    path.isAbsolute(value) ||
+    value.includes("..") ||
+    [...value].some((char) => char.charCodeAt(0) < 32 || char === ":" || char === "\\")
+  ) {
     throw new Error("Unsafe repository path");
   }
-  return value.replaceAll("\\", "/");
+  return path.posix.normalize(value.replaceAll("\\", "/"));
 }
+
+export {
+  captureArtifact,
+  assertArtifactCurrent,
+  parseArtifact,
+  restoreArtifact,
+  artifactApprovalHash,
+  assertReviewEvidence,
+  sha256,
+  assertReproduction,
+  assertReproductionEditable,
+  type ReviewArtifact,
+  type ReproductionProof,
+} from "./artifact.js";
 
 export function approvalHash(input: {
   taskId: string;

@@ -98,6 +98,15 @@ describe("routeAfterScopeCheck", () => {
 });
 
 describe("routeAfterTest", () => {
+  it.each(["not-run", "not-configured", undefined] as const)(
+    "cannot review missing reproduction evidence: %s",
+    (status) => {
+      const report = testReport({ reproductionFixed: status as TestReport["reproductionFixed"] });
+      expect(routeAfterTest(report, { next: "REVIEWER", reason: "ignore evidence" }, 0, 3).next).toBe(
+        "NEEDS_ATTENTION",
+      );
+    },
+  );
   it("sends a fully passing run to review", () => {
     expect(routeAfterTest(testReport(), undefined, 0, 2).next).toBe("REVIEWER");
   });

@@ -1,4 +1,5 @@
-import { db } from "@bugwright/database";
+import { assertTaskLease, db, updateTaskWithLease } from "@bugwright/database";
+import { assertArtifactCurrent, type ReviewArtifact } from "@bugwright/policy";
 import {
   AgentRole,
   AttemptRecord,
@@ -28,7 +29,6 @@ import {
   reviewerContext,
   testerContext,
 } from "./context.js";
-import { changedFilesFromDiff } from "./scope.js";
 import { detectTransformError, implicatesAnyFile, relativeToProject } from "@bugwright/adapters";
 
 /* -------------------------------------------------------------------------- */
@@ -266,9 +266,9 @@ async function modelRole<T>(input: ModelRoleInput<T>) {
       contextChars: JSON.stringify(input.payload).length,
     },
   });
-  await db.task.update({
-    where: { id: input.taskId },
-    data: { currentAgent: input.role, delegationCycles: { increment: 1 } },
+  await updateTaskWithLease(input.taskId, {
+    currentAgent: input.role,
+    delegationCycles: { increment: 1 },
   });
   await db.taskEvent.create({
     data: {
@@ -289,12 +289,16 @@ async function modelRole<T>(input: ModelRoleInput<T>) {
       tools: input.tools.map((tool) => definitions[tool]),
       maxTurns: input.maxTurns ?? 8,
       execute: async (name, args) => {
+        await assertTaskLease(input.taskId);
         const pair = mapping[name];
         if (!pair) throw new Error(`Unknown tool ${name}`);
-        return input.mcp.call(input.role as never, pair[0], pair[1], args, input.iteration);
+        const output = await input.mcp.call(input.role as never, pair[0], pair[1], args, input.iteration);
+        await assertTaskLease(input.taskId);
+        return output;
       },
     });
 
+    await assertTaskLease(input.taskId);
     const raw = parseStructured<T>(result.text);
     const output = input.schema ? input.schema.parse(raw) : raw;
     const duration = Date.now() - started;
@@ -317,12 +321,9 @@ async function modelRole<T>(input: ModelRoleInput<T>) {
         durationMs: duration,
       },
     });
-    await db.task.update({
-      where: { id: input.taskId },
-      data: {
-        modelCalls: { increment: result.modelCalls },
-        costUsd: { increment: result.costUsd },
-      },
+    await updateTaskWithLease(input.taskId, {
+      modelCalls: { increment: result.modelCalls },
+      costUsd: { increment: result.costUsd },
     });
     await db.taskEvent.create({
       data: {
@@ -353,10 +354,7 @@ async function modelRole<T>(input: ModelRoleInput<T>) {
       },
     });
     if (modelCalls) {
-      await db.task.update({
-        where: { id: input.taskId },
-        data: { modelCalls: { increment: modelCalls } },
-      });
+      await updateTaskWithLease(input.taskId, { modelCalls: { increment: modelCalls } });
     }
     throw error;
   }
@@ -717,7 +715,9 @@ export async function tester(
   iteration: number,
   inputArtifactIds: string[],
   reproductionTestPath?: string,
+  verification?: { root: string; artifact: ReviewArtifact },
 ): Promise<RoleResult<TestReport>> {
+  if (!verification) throw new Error("A captured artifact is required for testing");
   const started = Date.now();
   const input = testerContext(issue, patch, diff);
   const run = await db.agentRun.create({
@@ -734,22 +734,29 @@ export async function tester(
       contextChars: JSON.stringify(input).length,
     },
   });
-  await db.task.update({
-    where: { id: taskId },
-    data: { currentAgent: "TESTER", delegationCycles: { increment: 1 } },
+  await updateTaskWithLease(taskId, {
+    currentAgent: "TESTER",
+    delegationCycles: { increment: 1 },
   });
 
   let toolCalls = 0;
   const call = async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {
     toolCalls++;
-    return parseToolJson<T>(await mcp.call("TESTER", "runner", name, args, iteration));
+    await assertTaskLease(taskId);
+    await assertArtifactCurrent(verification.root, verification.artifact);
+    const response = parseToolJson<T>(await mcp.call("TESTER", "runner", name, args, iteration));
+    await assertTaskLease(taskId);
+    await assertArtifactCurrent(verification.root, verification.artifact);
+    return response;
   };
 
-  const record = async (result: RunnerResult) => {
+  const record = async (result: RunnerResult, kind = "static") => {
     if (result.status !== "ran") return;
     await db.testRun.create({
       data: {
         taskId,
+        artifactHash: verification.artifact.hash,
+        kind,
         command: result.command ?? "",
         exitCode: result.exitCode ?? -1,
         stdout: result.stdout ?? "",
@@ -760,6 +767,7 @@ export async function tester(
   };
 
   const complete = async (report: TestReport) => {
+    report = { ...report, artifactHash: verification.artifact.hash };
     await db.agentRun.update({
       where: { id: run.id },
       data: {
@@ -774,7 +782,7 @@ export async function tester(
   };
 
   try {
-    const changed = changedFilesFromDiff(diff);
+    const changed = verification.artifact.files.map((file) => file.path);
     const selection = await call<{ status: string; project?: DetectedProject; reason?: string }>(
       "select_project",
       { changedFiles: changed },
@@ -864,7 +872,7 @@ export async function tester(
         projectPath: reproProject,
         only: reproductionTestPath,
       });
-      await record(result);
+      await record(result, "reproduction-after");
       if (result.status !== "ran") {
         notConfigured.push(`reproduction: ${result.reason}`);
       } else if (
@@ -898,7 +906,7 @@ export async function tester(
 
     /* ---- the existing suite: did anything break? ---- */
     const regressionResult = await call<RunnerResult>("run_test", { projectPath });
-    await record(regressionResult);
+    await record(regressionResult, "regression");
     const regression = statusOf(regressionResult);
     if (regressionResult.status === "ran") {
       testsRun.push(regressionResult.command ?? "test");
@@ -970,7 +978,7 @@ export async function tester(
       notConfigured.push(`lint: ${lintResult.reason}`);
     }
 
-    const passed = failures.length === 0;
+    const passed = failures.length === 0 && reproductionFixed === "passed";
     const infrastructure = failures.some((failure) => failure.category === "infrastructure");
     const summaryParts = [
       reproductionTestPath

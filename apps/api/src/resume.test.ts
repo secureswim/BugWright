@@ -19,6 +19,19 @@ const patch = { summary: "fix" };
 const verified = { passed: true, reproductionFixed: "passed" };
 
 describe("resumeCheckpoint", () => {
+  it.each([undefined, "not-run", "not-configured"])(
+    "does not reuse incomplete verification: %s",
+    (status) => {
+      expect(
+        resumeCheckpoint({
+          ...empty,
+          patchProposal: patch,
+          diff: "d",
+          testReport: { passed: true, reproductionFixed: status },
+        }),
+      ).toBe("TESTING");
+    },
+  );
   it("starts from the beginning with nothing persisted", () => {
     expect(resumeCheckpoint(empty)).toBe("QUEUED");
   });

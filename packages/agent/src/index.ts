@@ -1,7 +1,16 @@
-import { access, cp, mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, cp, mkdir, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { db, TaskState } from "@bugwright/database";
+import {
+  assertTaskLease,
+  db,
+  LeaseLostError,
+  Prisma,
+  TaskState,
+  updateTaskWithLease,
+  withTaskLease,
+} from "@bugwright/database";
 import {
   AttemptRecord,
   ManagerPlan,
@@ -11,7 +20,17 @@ import {
   ReviewReport,
   TestReport,
 } from "@bugwright/shared";
-import { approvalHash, resolveInside } from "@bugwright/policy";
+import {
+  resolveInside,
+  captureArtifact,
+  assertArtifactCurrent,
+  restoreArtifact,
+  assertReproduction,
+  artifactApprovalHash,
+  sha256,
+  type ReproductionProof,
+  type ReviewArtifact,
+} from "@bugwright/policy";
 import { McpTools, parseToolJson } from "./mcp.js";
 import {
   coder,
@@ -29,7 +48,7 @@ import {
   routeAfterScopeCheck,
   routeAfterTest,
 } from "./state-machine.js";
-import { assessScope, changedFilesFromDiff } from "./scope.js";
+import { assessScope } from "./scope.js";
 import { detectTransformError } from "@bugwright/adapters";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
@@ -44,13 +63,14 @@ async function exists(value: string) {
 }
 
 async function event(taskId: string, type: string, title: string, detail?: string, iteration = 0) {
+  await assertTaskLease(taskId);
   await db.taskEvent.create({
     data: { taskId, type, title, detail, agentRole: "MANAGER", status: "COMPLETED", iteration },
   });
 }
 
 async function state(taskId: string, next: TaskState, title: string, iteration = 0) {
-  await db.task.update({ where: { id: taskId }, data: { state: next, currentAgent: "MANAGER" } });
+  await updateTaskWithLease(taskId, { state: next, currentAgent: "MANAGER" });
   await event(taskId, "STATE_CHANGED", title, undefined, iteration);
 }
 
@@ -89,7 +109,18 @@ async function prepare(
   } else {
     const cloned = await command(
       "git",
-      ["clone", "--depth", "1", "--branch", task.baseBranch, "--", task.repositoryUrl, repoRoot],
+      [
+        "-c",
+        "core.autocrlf=false",
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        task.baseBranch,
+        "--",
+        task.repositoryUrl,
+        repoRoot,
+      ],
       workspaceRoot,
     );
     if (cloned.code !== 0) throw new Error(`Clone failed: ${cloned.stderr.slice(-2000)}`);
@@ -140,7 +171,26 @@ async function attemptHistory(taskId: string): Promise<AttemptRecord[]> {
   return attempts;
 }
 
-export async function runTask(taskId: string) {
+const RUNNABLE_STATES: TaskState[] = [
+  "QUEUED",
+  "PREPARING",
+  "RESEARCHING",
+  "PLANNING",
+  "REPRODUCING",
+  "CODING",
+  "TESTING",
+  "RE_RESEARCHING",
+  "RE_CODING",
+  "REVIEWING",
+  "REVISION_REQUESTED",
+];
+
+export async function runTask(taskId: string, owner = `direct:${process.pid}:${randomUUID()}`) {
+  const result = await withTaskLease(taskId, owner, RUNNABLE_STATES, () => executeTask(taskId));
+  return result.claimed;
+}
+
+async function executeTask(taskId: string) {
   const runStarted = Date.now();
   let task = await db.task.findUniqueOrThrow({ where: { id: taskId } });
   const resumeState = task.state;
@@ -164,10 +214,15 @@ export async function runTask(taskId: string) {
     await state(taskId, "PREPARING", "Manager is preparing a resumable task workspace");
     await mkdir(workspaceRoot, { recursive: true });
     const base = await prepare(task, repoRoot, workspaceRoot);
-    await db.task.update({
-      where: { id: taskId },
-      data: { workspacePath: repoRoot, baseCommit: base, error: null },
-    });
+    if (resumeState !== "QUEUED" && task.reviewArtifact) {
+      await restoreArtifact(repoRoot, task.reviewArtifact);
+      await event(
+        taskId,
+        "CHECKPOINT_RECOVERED",
+        "Manager restored the last verified artifact before resuming",
+      );
+    }
+    await updateTaskWithLease(taskId, { workspacePath: repoRoot, baseCommit: base, error: null });
 
     mcp = new McpTools(taskId, repoRoot);
     await mcp.connect(["repository", "git", "runner", ...(!task.issueTitle ? (["github"] as const) : [])]);
@@ -184,7 +239,7 @@ export async function runTask(taskId: string) {
       );
       title = issue.title;
       body = issue.body;
-      await db.task.update({ where: { id: taskId }, data: { issueTitle: title, issueBody: body } });
+      await updateTaskWithLease(taskId, { issueTitle: title, issueBody: body });
     }
 
     const issue = {
@@ -205,10 +260,7 @@ export async function runTask(taskId: string) {
       const planned = await managerPlan(taskId, issue, mcp);
       plan = planned.plan;
       managerRunId = planned.runId;
-      await db.task.update({
-        where: { id: taskId },
-        data: { managerPlan: plan as never, plan: plan.objective },
-      });
+      await updateTaskWithLease(taskId, { managerPlan: plan as never, plan: plan.objective });
     } else {
       managerRunId =
         (
@@ -277,7 +329,7 @@ export async function runTask(taskId: string) {
       );
       research = synthesis.report;
       researchArtifacts.push(synthesis.artifactId);
-      await db.task.update({ where: { id: taskId }, data: { researchReport: research as never } });
+      await updateTaskWithLease(taskId, { researchReport: research as never });
     } else {
       const stored = await db.agentMessage.findMany({
         where: { taskId, type: { startsWith: "RESEARCH_REPORT:" } },
@@ -290,6 +342,8 @@ export async function runTask(taskId: string) {
 
     /* --------------------------------------------------------- reproduction */
     let reproduction = task.reproductionReport as unknown as ReproductionReport | null;
+    let reproductionProof = task.reproductionProof as unknown as ReproductionProof | null;
+    let reproductionBaseline: ReviewArtifact | null = null;
     if (!reproduction) {
       await state(taskId, "REPRODUCING", "Manager delegated reproduction before any code is written");
 
@@ -297,6 +351,12 @@ export async function runTask(taskId: string) {
       // Manager. The Reproducer writes the test; it cannot execute anything,
       // so it cannot certify its own work.
       const verify = async (testPath: string) => {
+        const baseline = await captureArtifact(repoRoot, base);
+        reproductionBaseline = baseline;
+        const testHash = sha256(await readFile(resolveInside(repoRoot, testPath)));
+        if (!baseline.files.some((file) => file.path === testPath && file.sha256 === testHash)) {
+          throw new Error("The reproduction test must be a captured, non-ignored change");
+        }
         const selection = parseToolJson<{ status: string; project?: { projectPath: string } }>(
           await mcp!.call("TESTER", "runner", "select_project", { changedFiles: [testPath] }, 0),
         );
@@ -311,11 +371,14 @@ export async function runTask(taskId: string) {
           stdout?: string;
           stderr?: string;
           noTestsCollected?: boolean;
+          command?: string;
+          durationMs?: number;
         }>(await mcp!.call("TESTER", "runner", "run_test", { projectPath, only: testPath }, 0));
         if (result.status !== "ran") {
           return { failed: false, output: "The reproduction test could not be executed", ran: false };
         }
         const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+        await assertArtifactCurrent(repoRoot, baseline);
         // A runner that collected no tests also exits non-zero. Treating that
         // as a failing test would record a reproduction that never ran.
         if (result.noTestsCollected || detectTransformError(output)) {
@@ -327,6 +390,28 @@ export async function runTask(taskId: string) {
             ran: false,
           };
         }
+        if (typeof result.exitCode !== "number" || result.exitCode < 0) {
+          return { failed: false, output: "No valid test exit status", ran: false };
+        }
+        const evidence = await db.testRun.create({
+          data: {
+            taskId,
+            artifactHash: baseline.hash,
+            kind: "reproduction-before",
+            command: result.command ?? "reproduction",
+            exitCode: result.exitCode,
+            stdout: result.stdout ?? "",
+            stderr: result.stderr ?? "",
+            durationMs: result.durationMs ?? 0,
+          },
+        });
+        if (result.exitCode !== 0)
+          reproductionProof = {
+            path: testPath,
+            sha256: testHash,
+            baselineArtifactHash: baseline.hash,
+            testRunId: evidence.id,
+          };
         return { failed: result.exitCode !== 0, output, ran: true };
       };
 
@@ -365,9 +450,10 @@ export async function runTask(taskId: string) {
       );
       reproduction = produced.report;
       researchArtifacts.push(produced.artifactId);
-      await db.task.update({
-        where: { id: taskId },
-        data: { reproductionReport: reproduction as never },
+      await updateTaskWithLease(taskId, {
+        reproductionReport: reproduction as never,
+        reproductionProof: reproductionProof ? (reproductionProof as never) : Prisma.DbNull,
+        reviewArtifact: reproductionBaseline ? (reproductionBaseline as never) : Prisma.DbNull,
       });
 
       const decision = routeAfterReproduction(reproduction);
@@ -379,6 +465,13 @@ export async function runTask(taskId: string) {
     }
 
     const reproductionTestPath = reproduction?.reproduced ? reproduction.testPath : undefined;
+    if (!reproductionTestPath || !reproductionProof || reproductionProof.path !== reproductionTestPath) {
+      throw new Error(
+        "A recorded failing reproduction with a protected test is required; start a fresh task",
+      );
+    }
+    await assertReproduction(repoRoot, reproductionProof);
+    await mcp.protectReproduction(reproductionTestPath);
 
     /* -------------------------------------------------- code / test / review */
     let revision = task.revisionCycle;
@@ -389,8 +482,16 @@ export async function runTask(taskId: string) {
       patch && diff && (resumeState === "TESTING" || resumeState === "REVIEWING"),
     );
     let reuseVerifiedTests = Boolean(
-      resumeState === "REVIEWING" && task.testReport && (task.testReport as unknown as TestReport).passed,
+      resumeState === "REVIEWING" &&
+      task.reviewArtifact &&
+      task.testReport &&
+      (task.testReport as unknown as TestReport).passed === true &&
+      (task.testReport as unknown as TestReport).reproductionFixed === "passed" &&
+      (task.testReport as unknown as TestReport).artifactHash ===
+        (task.reviewArtifact as unknown as ReviewArtifact).hash,
     );
+    let verifiedArtifact: ReviewArtifact | undefined;
+    if (reuseVerifiedTests) verifiedArtifact = await assertArtifactCurrent(repoRoot, task.reviewArtifact);
     let lastEvidence: TestReport | ReviewReport | undefined;
     let attempts = await attemptHistory(taskId);
 
@@ -454,19 +555,24 @@ export async function runTask(taskId: string) {
             attempts,
           });
           patch = coded.report;
-          const diffRaw = parseToolJson<{ stdout: string }>(
-            await mcp.call("CODER", "git", "get_diff", {}, revision),
-          );
-          diff = diffRaw.stdout;
+          await assertReproduction(repoRoot, reproductionProof);
+          const codedArtifact = await captureArtifact(repoRoot, base, reproductionProof);
+          diff = codedArtifact.diff;
           if (!diff.trim()) throw new Error("Coder returned without a patch");
-          await db.task.update({
-            where: { id: taskId },
-            data: { patchProposal: patch as never, diff, summary: patch.summary },
+          await updateTaskWithLease(taskId, {
+            patchProposal: patch as never,
+            reviewArtifact: codedArtifact as never,
+            diff,
+            summary: patch.summary,
           });
           codeArtifactIds = [coded.artifactId];
 
           /* ---- deterministic scope guard, before spending a test run ---- */
-          const verdict = assessScope(changedFilesFromDiff(diff), reports, { reproductionTestPath });
+          const verdict = assessScope(
+            codedArtifact.files.map((file) => file.path),
+            reports,
+            { reproductionTestPath },
+          );
           await db.taskEvent.create({
             data: {
               taskId,
@@ -509,7 +615,7 @@ export async function runTask(taskId: string) {
               },
             ];
             revision++;
-            await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+            await updateTaskWithLease(taskId, { revisionCycle: revision });
             continue;
           }
 
@@ -522,9 +628,16 @@ export async function runTask(taskId: string) {
         // property that mattered is preserved by checking it instead: if the
         // repository's own test suite modified the tree, the diff a human
         // would approve is not the diff that was tested.
-        const diffBeforeTests = parseToolJson<{ stdout: string }>(
-          await mcp.call("CODER", "git", "get_diff", {}, revision),
-        ).stdout;
+        const artifact = await captureArtifact(repoRoot, base, reproductionProof);
+        diff = artifact.diff;
+        await updateTaskWithLease(taskId, {
+          reviewArtifact: artifact as never,
+          diff,
+          testReport: Prisma.DbNull,
+          reviewReport: Prisma.DbNull,
+          approvalHash: null,
+          approvedAt: null,
+        });
         const tested = await tester(
           taskId,
           issue,
@@ -534,18 +647,14 @@ export async function runTask(taskId: string) {
           testAttempts,
           codeArtifactIds,
           reproductionTestPath,
+          { root: repoRoot, artifact },
         );
         testReport = tested.report;
         testArtifactId = tested.artifactId;
-        await db.task.update({
-          where: { id: taskId },
-          data: { testReport: testReport as never, attempt: testAttempts },
-        });
+        await updateTaskWithLease(taskId, { testReport: testReport as never, attempt: testAttempts });
 
-        const diffAfterTests = parseToolJson<{ stdout: string }>(
-          await mcp.call("CODER", "git", "get_diff", {}, revision),
-        ).stdout;
-        if (diffAfterTests !== diffBeforeTests) {
+        const afterTests = await captureArtifact(repoRoot, base, reproductionProof);
+        if (afterTests.hash !== artifact.hash) {
           await event(
             taskId,
             "WORKSPACE_TAMPERED",
@@ -562,11 +671,12 @@ export async function runTask(taskId: string) {
           );
           return;
         }
-        diff = diffAfterTests;
+        diff = artifact.diff;
+        verifiedArtifact = artifact;
       }
 
       /* ---- routing after tests ---- */
-      const testsAccepted = testReport.passed && testReport.reproductionFixed !== "failed";
+      const testsAccepted = testReport.passed === true && testReport.reproductionFixed === "passed";
       if (!testsAccepted) {
         const infrastructureFailure = testReport.suggestedNextAction === "NEEDS_ATTENTION";
         const advisory = infrastructureFailure
@@ -614,7 +724,7 @@ export async function runTask(taskId: string) {
           return;
         }
         revision++;
-        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        await updateTaskWithLease(taskId, { revisionCycle: revision });
         continue;
       }
 
@@ -639,7 +749,7 @@ export async function runTask(taskId: string) {
         reproduction,
       );
       const review = reviewed.report;
-      await db.task.update({ where: { id: taskId }, data: { reviewReport: review as never } });
+      await updateTaskWithLease(taskId, { reviewReport: review as never });
 
       const advisory =
         review.decision === "reject"
@@ -688,7 +798,7 @@ export async function runTask(taskId: string) {
         researchArtifacts.push(extra.artifactId);
         lastEvidence = review;
         revision++;
-        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        await updateTaskWithLease(taskId, { revisionCycle: revision });
         continue;
       }
 
@@ -701,7 +811,7 @@ export async function runTask(taskId: string) {
         );
         lastEvidence = review;
         revision++;
-        await db.task.update({ where: { id: taskId }, data: { revisionCycle: revision } });
+        await updateTaskWithLease(taskId, { revisionCycle: revision });
         continue;
       }
 
@@ -711,31 +821,24 @@ export async function runTask(taskId: string) {
       }
 
       /* ---- human gate ---- */
+      if (!verifiedArtifact) throw new Error("Verified artifact is missing");
+      await assertArtifactCurrent(repoRoot, verifiedArtifact);
       const tests = await db.testRun.findMany({ where: { taskId }, orderBy: { createdAt: "asc" } });
-      const hash = approvalHash({
+      const hash = artifactApprovalHash({
         taskId,
         repository: task.repositoryUrl,
         targetBranch: task.baseBranch,
-        baseCommit: base,
-        diff,
-        tests: tests.map((run) => ({
-          command: run.command,
-          exitCode: run.exitCode,
-          stdout: run.stdout,
-          stderr: run.stderr,
-          durationMs: run.durationMs,
-        })),
+        artifact: verifiedArtifact,
+        report: testReport,
+        tests,
       });
 
-      await db.task.update({
-        where: { id: taskId },
-        data: {
-          state: "AWAITING_HUMAN_APPROVAL",
-          currentAgent: null,
-          diff,
-          approvalHash: hash,
-          reviewReport: review as never,
-        },
+      await updateTaskWithLease(taskId, {
+        state: "AWAITING_HUMAN_APPROVAL",
+        currentAgent: null,
+        diff,
+        approvalHash: hash,
+        reviewReport: review as never,
       });
       await event(
         taskId,
@@ -749,10 +852,11 @@ export async function runTask(taskId: string) {
 
     await state(taskId, "NEEDS_ATTENTION", "Manager stopped at the configured iteration limit");
   } catch (error) {
+    if (error instanceof LeaseLostError) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    await db.task
-      .update({ where: { id: taskId }, data: { state: "FAILED", currentAgent: null, error: message } })
-      .catch(() => {});
+    await updateTaskWithLease(taskId, { state: "FAILED", currentAgent: null, error: message }).catch(
+      () => {},
+    );
     await event(taskId, "RUN_FAILED", "Multi-agent run failed", message).catch(() => {});
     throw error;
   } finally {
@@ -766,3 +870,4 @@ export { resolveProvider, reviewerIsIndependent, parseSpec, type ModelRole } fro
 export { FakeProvider, ReplayProvider, RecordingProvider } from "./model/index.js";
 export { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
 export { attemptHistory };
+export { validateReviewPackage } from "./review-artifact.js";

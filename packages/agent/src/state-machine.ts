@@ -110,7 +110,10 @@ export function routeAfterTest(
         };
   }
 
-  if (report.passed) {
+  if (report.reproductionFixed !== "passed" && report.reproductionFixed !== "failed") {
+    return stop("The reproduction test has no explicit passing result; fresh verification is required.");
+  }
+  if (report.passed && report.reproductionFixed === "passed") {
     return { next: "REVIEWER", reason: "All selected empirical checks passed." };
   }
 

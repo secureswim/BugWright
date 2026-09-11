@@ -150,6 +150,11 @@ npm run db:push
 npm run dev
 ```
 
+Existing installations must run `npm run db:generate` and `npm run db:push`
+after pulling the artifact-integrity schema change. Tasks created before this
+change do not contain a versioned artifact and must be started again before
+they can be approved or published.
+
 Open `http://127.0.0.1:3000` and choose **Try the built-in demo fixture**. The
 run stops at the human approval gate. Add a GitHub token only when you want to
 test draft-PR publishing.
@@ -200,8 +205,9 @@ BUGWRIGHT_REPLAY=1 npm test        # replay forever, free
   exhaustively over every decision a compromised Manager could return.
 - **Tests are sandboxed.** UID 10001, `--cap-drop ALL`, no new privileges, no
   network, 2 CPUs, 2 GB, 256 PIDs, five-minute timeout, and the workspace
-  mounted **read-only** with a tmpfs overlay — so a hostile test suite cannot
-  rewrite the source under review or the `.git` directory.
+  mounted writable for tool compatibility while `.git` remains read-only.
+  BugWright fingerprints the complete source snapshot around every test tool
+  call and rejects any changed snapshot.
 - **Protected paths cover the supply chain.** `.github/workflows/`, CI configs,
   Dockerfiles, and lockfiles are unwritable; `package.json` stays editable but
   `scripts`, `bin`, and `gypfile` are not, because those execute on whoever
@@ -209,27 +215,34 @@ BUGWRIGHT_REPLAY=1 npm test        # replay forever, free
 - **A deterministic scope guard** compares changed files against the researched
   surface before a test run is spent. It is ordinary code, so the agent whose
   patch it checks cannot argue with it.
-- **Approval binds an artifact.** The hash covers repository, branch, base
-  commit, complete diff, and every test run's output. One changed byte
-  invalidates it, and a publish retry revalidates before touching GitHub.
-- **Publishing is idempotent.** One tree, one commit, one ref update through
-  the Git Data API; an existing branch and open PR are reused, so a retried job
-  cannot half-write a branch or open a duplicate.
+- **Approval binds an artifact.** A versioned SHA-256 fingerprint binds the
+  repository and target branch to the base commit, complete raw source bytes,
+  Git modes, binary diff, protected reproduction, and exact test evidence. One
+  changed source or evidence byte invalidates approval.
+- **Publication uses captured bytes.** The publisher uploads the reviewed
+  artifact, verifies GitHub produced the expected tree, and only then creates
+  a commit. Existing branches and open PRs are reused on retries. Exactly-once
+  worker execution remains future work.
 
 Prompt injection is treated as something that _will_ sometimes succeed, so the
 controls above do not depend on the model refusing it — see
 [docs/threat-model.md](docs/threat-model.md), and `fixtures/injection-issue`
 for an end-to-end attempt with its expected outcome recorded in the fixture.
+The artifact format, invariants, and residual risks are documented in
+[docs/artifact-integrity.md](docs/artifact-integrity.md).
 
 ## Recovery
 
 Every run, message, report, tool call, state change, and piece of evidence is
-persisted. The worker requeues interrupted non-terminal tasks on restart, and a
-stopped task offers **Resume from checkpoint**: BugWright picks the latest
-_valid_ persisted stage rather than repeating completed model work and test
-runs. A stage only counts as complete if its whole artifact set is present — a
-patch with no diff is not a finished coding stage, and a green suite whose
-reproduction test still failed is not a verified test stage.
+persisted. Each execution has a renewable database lease and monotonically
+increasing fencing token. A replacement worker may take an expired lease, but
+the old generation can no longer call tools, update the task, or publish.
+
+On restart BugWright reconstructs the managed workspace from the latest
+verified artifact before resuming, rather than trusting files left by the
+crashed process. Publication uses a durable idempotency record and recovers an
+existing matching branch or pull request instead of creating a duplicate.
+See [docs/fenced-execution.md](docs/fenced-execution.md).
 
 ## Evaluation
 
@@ -255,6 +268,8 @@ dishonest. The protocol for running that comparison is in
   the pieces fit
 - [docs/threat-model.md](docs/threat-model.md) — adversaries, controls, and the
   gaps that are still open
+- [docs/fenced-execution.md](docs/fenced-execution.md) — worker leases,
+  checkpoint restoration, and publication recovery
 - [docs/decisions/](docs/decisions/) — ADRs, including why five roles became
   six and why the state machine overrides the model
 - [evaluations/README.md](evaluations/README.md) — the measurement protocol

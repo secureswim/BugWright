@@ -2,7 +2,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { toolGate } from "@bugwright/policy";
+import { toolGate, captureArtifact, resolveInside } from "@bugwright/policy";
 
 const root = path.resolve(process.env.BUGWRIGHT_REPO_ROOT ?? "");
 if (!process.env.BUGWRIGHT_REPO_ROOT) throw new Error("BUGWRIGHT_REPO_ROOT is required");
@@ -15,6 +15,7 @@ const text = (value: unknown) => ({
 });
 
 async function git(args: string[]) {
+  resolveInside(root, ".git");
   return await new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn("git", args, { cwd: root, windowsHide: true, shell: false });
     let stdout = "";
@@ -22,9 +23,7 @@ async function git(args: string[]) {
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
-    child.on("close", (code) =>
-      resolve({ exitCode: code ?? -1, stdout: stdout.slice(0, 200_000), stderr: stderr.slice(0, 30_000) }),
-    );
+    child.on("close", (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
   });
 }
 
@@ -37,15 +36,19 @@ if (allowed("get_status")) {
 }
 
 if (allowed("get_diff")) {
-  server.tool("get_diff", "Get the complete working-tree patch", {}, async () =>
-    text(await git(["diff", "--no-ext-diff", "--binary", "--"])),
-  );
+  server.tool("get_diff", "Get the complete patch including new files", {}, async () => {
+    const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+    const artifact = await captureArtifact(root, base);
+    return text({ exitCode: 0, stdout: artifact.diff, stderr: "" });
+  });
 }
 
 if (allowed("get_changed_files")) {
-  server.tool("get_changed_files", "List files changed by the agent", {}, async () =>
-    text(await git(["diff", "--name-status", "--"])),
-  );
+  server.tool("get_changed_files", "List files changed by the agent", {}, async () => {
+    const base = (await git(["rev-parse", "HEAD"])).stdout.trim();
+    const artifact = await captureArtifact(root, base);
+    return text(await git(["diff", "--no-renames", "--name-status", base, artifact.tree, "--"]));
+  });
 }
 
 if (allowed("get_base_commit")) {

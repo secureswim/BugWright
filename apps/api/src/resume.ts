@@ -31,7 +31,7 @@ export function resumeCheckpoint(task: CheckpointTask): ResumeCheckpoint {
   } | null;
 
   // A test run only counts as verified when it also showed the bug was fixed.
-  const verified = Boolean(testReport?.passed && testReport.reproductionFixed !== "failed");
+  const verified = Boolean(testReport?.passed === true && testReport.reproductionFixed === "passed");
 
   if (reviewReport?.decision === "approve" && verified && task.diff && task.approvalHash) {
     return "AWAITING_HUMAN_APPROVAL";

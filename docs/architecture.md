@@ -118,8 +118,17 @@ stays visible in `NEEDS_ATTENTION` rather than being discarded.
 ## Recovery
 
 PostgreSQL stores the plan, research, reproduction, patch, diff, test report,
-review report, approval hash, and every supporting artifact. pg-boss persists
-jobs and the worker requeues interrupted non-terminal tasks on startup.
+review report, approval hash, and every supporting artifact. A worker must
+atomically claim a renewable task lease before execution. Every guarded write
+includes its owner, lease generation, and unexpired deadline; after takeover,
+the previous generation is fenced out even if that process later wakes up.
+Lease acquisition and release are audit events.
+
+pg-boss persists jobs and retries delivery. Startup reconciliation requeues
+only non-terminal tasks whose lease is absent or expired. Before resuming,
+BugWright reconstructs source from raw Git blobs plus the most recent verified
+artifact, then recomputes its fingerprint. Ignored dependency/build caches are
+retained, but partial source writes from the failed worker are removed.
 
 `POST /tasks/:id/resume` selects the latest **valid** boundary, requiring the
 whole artifact set for a stage to count: a patch with no diff is not a finished
@@ -129,11 +138,17 @@ revalidates the current diff and evidence before retrying only the publish job.
 
 ## Publishing
 
-One tree, one commit, one ref update through the Git Data API — not a sequence
-of Contents API calls. An existing branch is fast-forwarded and an open pull
-request reused, so a retried job can neither half-write a branch nor open a
-duplicate. `assertEditable` runs again over every changed file immediately
-before the push.
+One tree, one commit, one ref creation through the Git Data API — not a
+sequence of Contents API calls. A `PublicationAttempt` is unique for the task,
+artifact, repository, and target branch. After a crash, a worker validates and
+adopts an existing matching commit/branch and reuses an open pull request. A
+diverged branch fails closed instead of being force-pushed. `assertEditable`
+runs again over every changed file immediately before the push.
+
+GitHub does not offer a transaction spanning object creation and the local
+database. A crash can therefore leave an unreachable duplicate Git object,
+but it cannot authorize different bytes or create a second branch/PR for the
+same publication key.
 
 ## Evaluation
 
