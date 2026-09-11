@@ -13,7 +13,7 @@ That is unsound, and the demo hid it. `fixtures/calculator-bug` ships
 So the suite fails before the patch and passes after it, and everything looks
 rigorous.
 
-Real repositories do not look like that. A bug exists precisely *because* no
+Real repositories do not look like that. A bug exists precisely _because_ no
 test catches it. On a real issue the suite passes before the patch and passes
 after it, so a green run means only **"nothing else broke."** It carries no
 evidence whatsoever that the reported bug was fixed.
@@ -52,8 +52,8 @@ a suite green is to delete the test that proves the bug.
 
 Good:
 
-- The claim becomes true: *no patch is accepted until a test that failed before
-  it passes after it.*
+- The claim becomes true: _no patch is accepted until a test that failed before
+  it passes after it._
 - The reproduction test ships in the pull request as a regression guard, which
   is what a human reviewer wants to see first anyway.
 - Bad diagnoses are caught **before** any code is written, which is much

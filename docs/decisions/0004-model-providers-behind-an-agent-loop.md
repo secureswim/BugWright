@@ -35,7 +35,7 @@ Supporting decisions:
   id; Gemini pairs by function name. The Gemini provider synthesises ids so the
   loop only ever sees one shape.
 - **Typed errors.** `ModelError` carries a kind, so the loop reacts to the
-  *kind* of failure: rate limits back off, context overflow triggers compaction
+  _kind_ of failure: rate limits back off, context overflow triggers compaction
   and a retry, auth failures stop immediately.
 - **Capability flags.** The loop reads `capabilities.jsonSchema` rather than
   branching on vendor names, so native constrained output is used where it

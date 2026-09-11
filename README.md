@@ -46,14 +46,14 @@ and it is a poor judge of all four.
 
 BugWright splits on **authority**, and enforces the split in code:
 
-| Role | Input | Output | Capabilities |
-| --- | --- | --- | --- |
-| Manager | issue and reports | plan, next-role advice | orchestration only, **no tools at all** |
-| Researcher | issue, failure evidence | `ResearchReport` | bounded reads, search, history |
-| Reproducer | issue, research | `ReproductionReport` | reads, **writes test files only** |
-| Coder | issue, research, attempt log | `PatchProposal` | reads, exact-context patching |
-| Tester | issue, current diff | `TestReport` | fixed container operations only |
-| Reviewer | issue, research, diff, tests | `ReviewReport` | bounded reads, git inspection |
+| Role       | Input                        | Output                 | Capabilities                            |
+| ---------- | ---------------------------- | ---------------------- | --------------------------------------- |
+| Manager    | issue and reports            | plan, next-role advice | orchestration only, **no tools at all** |
+| Researcher | issue, failure evidence      | `ResearchReport`       | bounded reads, search, history          |
+| Reproducer | issue, research              | `ReproductionReport`   | reads, **writes test files only**       |
+| Coder      | issue, research, attempt log | `PatchProposal`        | reads, exact-context patching           |
+| Tester     | issue, current diff          | `TestReport`           | fixed container operations only         |
+| Reviewer   | issue, research, diff, tests | `ReviewReport`         | bounded reads, git inspection           |
 
 Each role connects to its **own** MCP server processes, started with a gate
 naming exactly the tools it may call. The Tester's repository server has no
@@ -68,7 +68,7 @@ detection already returned.
 
 This is the part worth reading if you read nothing else.
 
-A bug exists *because* no test catches it. So on a real repository the existing
+A bug exists _because_ no test catches it. So on a real repository the existing
 suite passes before a patch and passes after it — a green test run means only
 **"nothing else broke."** It says nothing about whether the reported bug was
 fixed.
@@ -84,21 +84,21 @@ fails:
 - If nothing assertable can be written, the run stops. **That is a correct
   outcome**, and `fixtures/no-repro` exists to keep it honest.
 
-`TestReport` then answers two separate questions — *is the bug fixed?* and
-*did anything break?* — and a patch whose reproduction test still fails is
+`TestReport` then answers two separate questions — _is the bug fixed?_ and
+_did anything break?_ — and a patch whose reproduction test still fails is
 never approved, however green the suite is.
 
 See [ADR 6](docs/decisions/0006-reproduce-before-fixing.md).
 
 ## Supported repositories
 
-| | |
-| --- | --- |
+|               |                                                                                                          |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
 | **Languages** | Node.js / TypeScript, Python. Reading and patching are language-agnostic; verification needs an adapter. |
-| **Hosting** | Public HTTPS GitHub repositories. No SSH, GitLab, or self-hosted. |
-| **Tests** | Must run offline. Test containers get no network; only dependency installation does. |
-| **Layout** | Monorepos supported; detection recurses with a depth cap. |
-| **History** | Shallow clone, so `get_history` sees limited history. |
+| **Hosting**   | Public HTTPS GitHub repositories. No SSH, GitLab, or self-hosted.                                        |
+| **Tests**     | Must run offline. Test containers get no network; only dependency installation does.                     |
+| **Layout**    | Monorepos supported; detection recurses with a depth cap.                                                |
+| **History**   | Shallow clone, so `get_history` sees limited history.                                                    |
 
 A repository in an unsupported language is reported as such rather than
 silently failing: BugWright will read and patch it but refuses to claim it
@@ -174,7 +174,7 @@ npm run db:push; npm run dev
 npm run format:check
 npm run lint
 npm run typecheck
-npm test                      # 157 tests, no API key needed
+npm test                      # no API key needed
 npm run build -w @bugwright/web
 ```
 
@@ -216,7 +216,7 @@ BUGWRIGHT_REPLAY=1 npm test        # replay forever, free
   the Git Data API; an existing branch and open PR are reused, so a retried job
   cannot half-write a branch or open a duplicate.
 
-Prompt injection is treated as something that *will* sometimes succeed, so the
+Prompt injection is treated as something that _will_ sometimes succeed, so the
 controls above do not depend on the model refusing it — see
 [docs/threat-model.md](docs/threat-model.md), and `fixtures/injection-issue`
 for an end-to-end attempt with its expected outcome recorded in the fixture.
@@ -226,7 +226,7 @@ for an end-to-end attempt with its expected outcome recorded in the fixture.
 Every run, message, report, tool call, state change, and piece of evidence is
 persisted. The worker requeues interrupted non-terminal tasks on restart, and a
 stopped task offers **Resume from checkpoint**: BugWright picks the latest
-*valid* persisted stage rather than repeating completed model work and test
+_valid_ persisted stage rather than repeating completed model work and test
 runs. A stage only counts as complete if its whole artifact set is present — a
 patch with no diff is not a finished coding stage, and a green suite whose
 reproduction test still failed is not a verified test stage.

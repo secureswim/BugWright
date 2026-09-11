@@ -278,8 +278,8 @@ function Dashboard({
             From issue to <em>verified patch.</em>
           </h1>
           <p>
-            BugWright investigates GitHub issues, edits code through MCP, runs checks in an isolated container,
-            and waits for your approval before opening a draft PR.
+            BugWright investigates GitHub issues, edits code through MCP, runs checks in an isolated
+            container, and waits for your approval before opening a draft PR.
           </p>
         </div>
         <NewTask onCreated={onCreated} />

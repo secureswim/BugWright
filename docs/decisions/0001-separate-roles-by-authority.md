@@ -14,14 +14,14 @@ better justification than "multi-agent systems are interesting."
 Split by **authority**, not by skill. Each role gets the narrowest capability
 that lets it do its job:
 
-| Role | May do | May not do |
-| --- | --- | --- |
-| Manager | delegate | touch the repository at all |
-| Researcher | read, search, read history | write, execute |
-| Reproducer | read, write **test files only** | edit source, execute |
-| Coder | read, patch source | execute, publish, approve |
-| Tester | execute fixed operations in a container | read or modify source |
-| Reviewer | read, inspect diff and history | write, execute |
+| Role       | May do                                  | May not do                  |
+| ---------- | --------------------------------------- | --------------------------- |
+| Manager    | delegate                                | touch the repository at all |
+| Researcher | read, search, read history              | write, execute              |
+| Reproducer | read, write **test files only**         | edit source, execute        |
+| Coder      | read, patch source                      | execute, publish, approve   |
+| Tester     | execute fixed operations in a container | read or modify source       |
+| Reviewer   | read, inspect diff and history          | write, execute              |
 
 The claim is not that five models diagnose better than one. It is that **no
 single context can investigate, change, verify, and approve its own work.**
@@ -56,7 +56,7 @@ self-review is the specific thing it cannot do, and self-review is the entire
 point of the human gate that follows.
 
 **Three roles (research, code, verify).** Considered seriously. Rejected
-because "verify" would then mean both *running tests* and *judging the change*,
+because "verify" would then mean both _running tests_ and _judging the change_,
 which are different authorities: one executes code, the other must not.
 
 **Seven or more roles** (triage, planning, docs, and so on). Rejected as

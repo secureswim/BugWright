@@ -5,13 +5,7 @@ const ratio = (numerator: number, denominator: number) =>
   denominator ? Number((numerator / denominator).toFixed(3)) : 0;
 
 const mean = (values: number[]) =>
-  values.length
-    ? Number(
-        (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(
-          2,
-        ),
-      )
-    : 0;
+  values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)) : 0;
 
 type ReproductionShape = { reproduced?: boolean } | null;
 type TestShape = { reproductionFixed?: string } | null;
@@ -29,8 +23,7 @@ export async function evaluationMetrics() {
     include: { agentRuns: true, testRuns: true, events: true },
   });
   const completed = tasks.filter(
-    (task) =>
-      task.state === "COMPLETED" || task.state === "AWAITING_HUMAN_APPROVAL",
+    (task) => task.state === "COMPLETED" || task.state === "AWAITING_HUMAN_APPROVAL",
   );
   const agentRuns = tasks.flatMap((task) => task.agentRuns);
   const events = tasks.flatMap((task) => task.events);
@@ -39,8 +32,7 @@ export async function evaluationMetrics() {
 
   const attempted = tasks.filter((task) => task.reproductionReport !== null);
   const reproduced = attempted.filter(
-    (task) =>
-      (task.reproductionReport as ReproductionShape)?.reproduced === true,
+    (task) => (task.reproductionReport as ReproductionShape)?.reproduced === true,
   );
   const verifiedFix = completed.filter(
     (task) => (task.testReport as TestShape)?.reproductionFixed === "passed",
@@ -52,21 +44,12 @@ export async function evaluationMetrics() {
     core: {
       resolutionRate: ratio(completed.length, tasks.length),
       regressionRate: ratio(
-        completed.filter((task) =>
-          task.testRuns.some((run) => run.exitCode !== 0),
-        ).length,
+        completed.filter((task) => task.testRuns.some((run) => run.exitCode !== 0)).length,
         completed.length,
       ),
-      firstAttemptSuccess: ratio(
-        completed.filter((task) => task.attempt === 1).length,
-        completed.length,
-      ),
+      firstAttemptSuccess: ratio(completed.filter((task) => task.attempt === 1).length, completed.length),
       meanIterations: mean(tasks.map((task) => task.revisionCycle)),
-      meanDurationMs: mean(
-        tasks.map(
-          (task) => task.updatedAt.getTime() - task.createdAt.getTime(),
-        ),
-      ),
+      meanDurationMs: mean(tasks.map((task) => task.updatedAt.getTime() - task.createdAt.getTime())),
     },
 
     /**
@@ -81,8 +64,7 @@ export async function evaluationMetrics() {
       reproductionSuccessRate: ratio(reproduced.length, attempted.length),
       verifiedFixRate: ratio(verifiedFix.length, completed.length),
       stoppedUnreproducible: attempted.length - reproduced.length,
-      scopeViolations: events.filter((item) => item.type === "SCOPE_VIOLATION")
-        .length,
+      scopeViolations: events.filter((item) => item.type === "SCOPE_VIOLATION").length,
     },
 
     multiAgent: {
@@ -98,16 +80,10 @@ export async function evaluationMetrics() {
         byRole("CODER").filter((run) => run.status === "COMPLETED").length,
         byRole("CODER").length,
       ),
-      testerDetectionRate: ratio(
-        tests.filter((run) => run.exitCode !== 0).length,
-        tests.length,
-      ),
+      testerDetectionRate: ratio(tests.filter((run) => run.exitCode !== 0).length, tests.length),
       reviewerRejectionRate: ratio(
-        tasks.filter(
-          (task) =>
-            (task.reviewReport as { decision?: string } | null)?.decision ===
-            "reject",
-        ).length,
+        tasks.filter((task) => (task.reviewReport as { decision?: string } | null)?.decision === "reject")
+          .length,
         tasks.filter((task) => task.reviewReport).length,
       ),
       // Two instances of one model share failure modes, so a same-family
@@ -121,11 +97,8 @@ export async function evaluationMetrics() {
     },
 
     safety: {
-      unauthorizedToolAttempts: events.filter(
-        (item) => item.type === "TOOL_DENIED",
-      ).length,
-      scopeViolations: events.filter((item) => item.type === "SCOPE_VIOLATION")
-        .length,
+      unauthorizedToolAttempts: events.filter((item) => item.type === "TOOL_DENIED").length,
+      scopeViolations: events.filter((item) => item.type === "SCOPE_VIOLATION").length,
       toolFailures: events.filter((item) => item.type === "TOOL_FAILED").length,
       approvalBypassAttempts: 0,
     },
@@ -134,37 +107,17 @@ export async function evaluationMetrics() {
       totalModelCalls: agentRuns.reduce((sum, run) => sum + run.modelCalls, 0),
       totalRetries: agentRuns.reduce((sum, run) => sum + run.retries, 0),
       totalToolCalls: agentRuns.reduce((sum, run) => sum + run.toolCalls, 0),
-      totalInputTokens: agentRuns.reduce(
-        (sum, run) => sum + run.inputTokens,
-        0,
-      ),
-      totalOutputTokens: agentRuns.reduce(
-        (sum, run) => sum + run.outputTokens,
-        0,
-      ),
-      totalCostUsd: Number(
-        tasks.reduce((sum, task) => sum + task.costUsd, 0).toFixed(4),
-      ),
+      totalInputTokens: agentRuns.reduce((sum, run) => sum + run.inputTokens, 0),
+      totalOutputTokens: agentRuns.reduce((sum, run) => sum + run.outputTokens, 0),
+      totalCostUsd: Number(tasks.reduce((sum, task) => sum + task.costUsd, 0).toFixed(4)),
       costPerResolvedIssue: completed.length
-        ? Number(
-            (
-              tasks.reduce((sum, task) => sum + task.costUsd, 0) /
-              completed.length
-            ).toFixed(4),
-          )
+        ? Number((tasks.reduce((sum, task) => sum + task.costUsd, 0) / completed.length).toFixed(4))
         : 0,
       // Peak context per run, measured across the whole conversation including
       // tool results - not the size of the opening payload.
       meanPeakContextChars: mean(agentRuns.map((run) => run.contextChars)),
       contextByRole: Object.fromEntries(
-        [
-          "MANAGER",
-          "RESEARCHER",
-          "REPRODUCER",
-          "CODER",
-          "TESTER",
-          "REVIEWER",
-        ].map((role) => [
+        ["MANAGER", "RESEARCHER", "REPRODUCER", "CODER", "TESTER", "REVIEWER"].map((role) => [
           role,
           mean(byRole(role).map((run) => run.contextChars)),
         ]),

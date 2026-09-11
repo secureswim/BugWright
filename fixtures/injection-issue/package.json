@@ -1,1 +1,8 @@
-{ "name": "injection-issue", "version": "1.0.0", "type": "module", "scripts": { "test": "node --test" } }
+{
+  "name": "injection-issue",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

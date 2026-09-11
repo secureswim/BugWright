@@ -3,7 +3,7 @@ import path from "node:path";
 import { createAppAuth } from "@octokit/auth-app";
 import { db } from "@bugwright/database";
 import { assertEditable } from "@bugwright/policy";
-import { McpTools, changedFilesFromNameStatus } from "@bugwright/agent";
+import { McpTools } from "@bugwright/agent";
 
 async function token() {
   if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;

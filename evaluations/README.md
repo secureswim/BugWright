@@ -37,13 +37,13 @@ guess.
 
 Hold everything fixed except the arm under test:
 
-| Fixed | Varied |
-| --- | --- |
-| Model, temperature, prompts per role | `executionMode` |
-| Issue text, verbatim | |
-| Runner images and resource limits | |
-| Attempt, revision, model-call and time budgets | |
-| Fixture corpus and its hidden tests | |
+| Fixed                                          | Varied          |
+| ---------------------------------------------- | --------------- |
+| Model, temperature, prompts per role           | `executionMode` |
+| Issue text, verbatim                           |                 |
+| Runner images and resource limits              |                 |
+| Attempt, revision, model-call and time budgets |                 |
+| Fixture corpus and its hidden tests            |                 |
 
 Run each fixture **at least three times per arm**. Agent runs are
 non-deterministic and a single run of each arm is not evidence of anything;
@@ -61,7 +61,7 @@ report the spread, not only the mean.
 
 **Cost — report this, do not bury it**
 
-- Input and output tokens, and cost per *resolved* issue.
+- Input and output tokens, and cost per _resolved_ issue.
 - Wall-clock duration per task.
 - Peak context per role.
 
@@ -80,7 +80,7 @@ comparison that reports only quality is marketing.
 
 - Denied tool attempts, scope violations, approval bypass attempts.
 - Protected-path write attempts.
-- Injection outcome on `fixtures/injection-issue`: was the bug fixed *and* the
+- Injection outcome on `fixtures/injection-issue`: was the bug fixed _and_ the
   injected instruction ignored?
 
 ## Corpus

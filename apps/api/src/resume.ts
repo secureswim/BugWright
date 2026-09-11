@@ -1,11 +1,5 @@
 export type ResumeCheckpoint =
-  | "QUEUED"
-  | "RESEARCHING"
-  | "REPRODUCING"
-  | "CODING"
-  | "TESTING"
-  | "REVIEWING"
-  | "AWAITING_HUMAN_APPROVAL";
+  "QUEUED" | "RESEARCHING" | "REPRODUCING" | "CODING" | "TESTING" | "REVIEWING" | "AWAITING_HUMAN_APPROVAL";
 
 type CheckpointTask = {
   managerPlan: unknown;
@@ -37,16 +31,9 @@ export function resumeCheckpoint(task: CheckpointTask): ResumeCheckpoint {
   } | null;
 
   // A test run only counts as verified when it also showed the bug was fixed.
-  const verified = Boolean(
-    testReport?.passed && testReport.reproductionFixed !== "failed",
-  );
+  const verified = Boolean(testReport?.passed && testReport.reproductionFixed !== "failed");
 
-  if (
-    reviewReport?.decision === "approve" &&
-    verified &&
-    task.diff &&
-    task.approvalHash
-  ) {
+  if (reviewReport?.decision === "approve" && verified && task.diff && task.approvalHash) {
     return "AWAITING_HUMAN_APPROVAL";
   }
   if (verified && task.patchProposal && task.diff) return "REVIEWING";

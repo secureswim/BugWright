@@ -24,9 +24,7 @@ describe("resumeCheckpoint", () => {
   });
 
   it("resumes research once a plan exists", () => {
-    expect(resumeCheckpoint({ ...empty, managerPlan: plan })).toBe(
-      "RESEARCHING",
-    );
+    expect(resumeCheckpoint({ ...empty, managerPlan: plan })).toBe("RESEARCHING");
   });
 
   it("resumes reproduction once research exists", () => {

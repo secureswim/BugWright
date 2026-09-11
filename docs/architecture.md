@@ -59,7 +59,7 @@ tests, not prompt instructions. See
 
 A patch is accepted only when the first is `passed`. A green regression suite
 with a still-failing reproduction test routes back to the Coder, because it
-means nothing broke *and* nothing was fixed. See
+means nothing broke _and_ nothing was fixed. See
 [decisions/0006](decisions/0006-reproduce-before-fixing.md).
 
 The Reproducer cannot run its own test. The orchestrator invokes the Tester's

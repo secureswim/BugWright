@@ -32,7 +32,7 @@ Three things follow from that shape:
 
 - **`argv`, executed directly.** No `sh -lc`, so no quoting to get wrong and no
   shell to inject into.
-- **The allowlist becomes structural.** The adapter *constructs* the command;
+- **The allowlist becomes structural.** The adapter _constructs_ the command;
   the model supplies only an enumerated operation and a project path that
   detection already returned. It never contributes a token to a command line.
 - **"Not configured" is a distinct result from "failed".** Running
