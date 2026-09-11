@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
-import { assertTaskLease, db, transactionWithTaskLease, withTaskLease } from "@bugwright/database";
+import {
+  assertTaskLease,
+  db,
+  injectFault,
+  transactionWithTaskLease,
+  withTaskLease,
+} from "@bugwright/database";
 import { assertEditable, sha256 } from "@bugwright/policy";
 import { validateReviewPackage } from "@bugwright/agent";
 
@@ -25,7 +31,7 @@ class GitHubError extends Error {
 
 async function gh<T>(route: string, accessToken: string, init?: RequestInit): Promise<T> {
   await assertTaskLease();
-  const response = await fetch(`https://api.github.com${route}`, {
+  const response = await fetch(`${githubApiBase()}${route}`, {
     ...init,
     headers: {
       Accept: "application/vnd.github+json",
@@ -44,6 +50,22 @@ async function gh<T>(route: string, accessToken: string, init?: RequestInit): Pr
   }
   await assertTaskLease();
   return (await response.json()) as T;
+}
+
+function githubApiBase() {
+  const url = new URL(process.env.GITHUB_API_URL ?? "https://api.github.com");
+  if (!(["https:", "http:"] as string[]).includes(url.protocol))
+    throw new Error("GITHUB_API_URL must use HTTP or HTTPS");
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash)
+    throw new Error("GITHUB_API_URL must be an origin");
+  if (
+    url.protocol !== "https:" &&
+    process.env.NODE_ENV !== "test" &&
+    process.env.BUGWRIGHT_ALLOW_INSECURE_GITHUB_API !== "1"
+  ) {
+    throw new Error("An insecure GitHub API URL is allowed only for local reliability tests");
+  }
+  return url.origin;
 }
 
 async function optional<T>(request: Promise<T>) {
@@ -188,6 +210,7 @@ async function executePublication(taskId: string) {
         parents: [task.baseCommit],
       }),
     });
+    await injectFault("after_github_commit");
     commitSha = commit.sha;
     await checkpointPublication(taskId, attempt.id, {
       status: "COMMIT_CREATED",
@@ -204,6 +227,7 @@ async function executePublication(taskId: string) {
       method: "POST",
       body: JSON.stringify({ ref, sha: commitSha }),
     });
+    await injectFault("after_branch_creation");
   }
   await checkpointPublication(taskId, attempt.id, { status: "BRANCH_UPDATED" });
 
@@ -226,6 +250,7 @@ async function executePublication(taskId: string) {
           draft: true,
         }),
       });
+  if (!open.length) await injectFault("after_pr_creation");
   await finishPublication(taskId, attempt.id, pr.html_url, Boolean(open.length));
 }
 
@@ -247,7 +272,7 @@ async function finishPublication(
     await transaction.taskEvent.create({
       data: {
         taskId,
-        type: "PR_CREATED",
+        type: recovered ? "PUBLICATION_RECOVERED" : "PR_CREATED",
         title: recovered ? "Existing draft pull request recovered" : "Draft pull request created",
         detail: pullRequestUrl,
       },

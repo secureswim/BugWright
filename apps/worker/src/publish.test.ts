@@ -19,6 +19,7 @@ const leases = vi.hoisted(() => ({
   updateTask: vi.fn(),
   transaction: vi.fn(),
 }));
+const faults = vi.hoisted(() => ({ inject: vi.fn() }));
 vi.mock("@bugwright/database", () => ({
   db: database,
   Prisma: { DbNull: null },
@@ -26,6 +27,7 @@ vi.mock("@bugwright/database", () => ({
   updateTaskWithLease: leases.updateTask,
   withTaskLease: leases.withLease,
   transactionWithTaskLease: leases.transaction,
+  injectFault: faults.inject,
 }));
 
 let root: string;
@@ -172,6 +174,80 @@ describe("publisher artifact boundary", () => {
       }),
     );
   }, 20000);
+
+  it("routes GitHub calls through a configured reliability-test API", async () => {
+    vi.stubEnv("GITHUB_API_URL", "http://127.0.0.1:4567");
+    await publishTask("task");
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((request) => request.url.startsWith("http://127.0.0.1:4567/"))).toBe(true);
+  }, 20000);
+
+  it("records publication failure when a worker crashes after creating a remote commit", async () => {
+    faults.inject.mockImplementation(async (point: string) => {
+      if (point === "after_github_commit") throw new Error("simulated lost commit response");
+    });
+    await expect(publishTask("task")).rejects.toThrow(/lost commit response/);
+    expect(
+      requests.some((request) => request.method === "POST" && request.url.endsWith("/git/commits")),
+    ).toBe(true);
+    expect(requests.some((request) => request.url.includes("/git/refs"))).toBe(false);
+    expect(database.publicationAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { lastError: "simulated lost commit response" } }),
+    );
+  }, 20000);
+
+  it("recovers a pull request when its successful response is lost", async () => {
+    let branchExists = false;
+    let pullRequestExists = false;
+    let injected = false;
+    faults.inject.mockImplementation(async (point: string) => {
+      if (point === "after_pr_creation" && !injected) {
+        injected = true;
+        throw new Error("simulated lost pull request response");
+      }
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        requests.push({ url, method, body });
+        let response: unknown = {};
+        let status = 200;
+        if (url.endsWith(`/git/commits/${valid.baseCommit}`)) response = { tree: { sha: "base-tree" } };
+        else if (url.endsWith("/git/commits/commit"))
+          response = { tree: { sha: valid.reviewArtifact.tree }, parents: [{ sha: valid.baseCommit }] };
+        else if (url.includes("/git/ref/heads/")) {
+          if (branchExists) response = { object: { sha: "commit" } };
+          else status = 404;
+        } else if (url.endsWith("/git/blobs")) {
+          const bytes = Buffer.from(body.content, "base64");
+          response = { sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") };
+        } else if (url.endsWith("/git/trees")) response = { sha: valid.reviewArtifact.tree };
+        else if (url.endsWith("/git/commits")) response = { sha: "commit" };
+        else if (url.endsWith("/git/refs")) {
+          branchExists = true;
+          response = { object: { sha: "commit" } };
+        } else if (url.includes("/pulls?") && method === "GET")
+          response = pullRequestExists ? [{ html_url: "https://github.com/example/repo/pull/1" }] : [];
+        else if (url.endsWith("/pulls")) {
+          pullRequestExists = true;
+          response = { html_url: "https://github.com/example/repo/pull/1" };
+        }
+        return new Response(JSON.stringify(response), { status });
+      }),
+    );
+
+    await expect(publishTask("task")).rejects.toThrow(/lost pull request response/);
+    await expect(publishTask("task")).resolves.toBe(true);
+
+    expect(
+      requests.filter((request) => request.method === "POST" && request.url.endsWith("/pulls")),
+    ).toHaveLength(1);
+    expect(database.taskEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ type: "PUBLICATION_RECOVERED" }) }),
+    );
+  }, 30000);
 
   it("performs no GitHub request if source changed after approval", async () => {
     await writeFile(path.join(root, "source.js"), "unapproved bytes");

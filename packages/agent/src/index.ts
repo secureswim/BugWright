@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import {
   assertTaskLease,
   db,
+  injectFault,
   LeaseLostError,
   Prisma,
   TaskState,
@@ -186,7 +187,10 @@ const RUNNABLE_STATES: TaskState[] = [
 ];
 
 export async function runTask(taskId: string, owner = `direct:${process.pid}:${randomUUID()}`) {
-  const result = await withTaskLease(taskId, owner, RUNNABLE_STATES, () => executeTask(taskId));
+  const result = await withTaskLease(taskId, owner, RUNNABLE_STATES, async () => {
+    await injectFault("after_lease_claim");
+    await executeTask(taskId);
+  });
   return result.claimed;
 }
 
@@ -215,12 +219,18 @@ async function executeTask(taskId: string) {
     await mkdir(workspaceRoot, { recursive: true });
     const base = await prepare(task, repoRoot, workspaceRoot);
     if (resumeState !== "QUEUED" && task.reviewArtifact) {
+      const recoveryStarted = Date.now();
       await restoreArtifact(repoRoot, task.reviewArtifact);
-      await event(
-        taskId,
-        "CHECKPOINT_RECOVERED",
-        "Manager restored the last verified artifact before resuming",
-      );
+      await assertTaskLease(taskId);
+      await db.taskEvent.create({
+        data: {
+          taskId,
+          type: "CHECKPOINT_RECOVERED",
+          title: "Manager restored the last verified artifact before resuming",
+          status: "COMPLETED",
+          durationMs: Date.now() - recoveryStarted,
+        },
+      });
     }
     await updateTaskWithLease(taskId, { workspacePath: repoRoot, baseCommit: base, error: null });
 
@@ -565,6 +575,7 @@ async function executeTask(taskId: string) {
             diff,
             summary: patch.summary,
           });
+          await injectFault("after_coding_checkpoint");
           codeArtifactIds = [coded.artifactId];
 
           /* ---- deterministic scope guard, before spending a test run ---- */
@@ -638,6 +649,7 @@ async function executeTask(taskId: string) {
           approvalHash: null,
           approvedAt: null,
         });
+        await injectFault("during_testing");
         const tested = await tester(
           taskId,
           issue,

@@ -53,3 +53,32 @@ jobs:
         run: |
           docker build -t bugwright-runner-node:ci -f docker/runner.node.Dockerfile .
           docker build -t bugwright-runner-python:ci -f docker/runner.python.Dockerfile .
+
+  reliability:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bugwright
+          POSTGRES_PASSWORD: bugwright
+          POSTGRES_DB: bugwright_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bugwright -d bugwright_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://bugwright:bugwright@localhost:5432/bugwright_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run db:generate
+      - run: npm run db:push
+      - run: npm run test:reliability

@@ -22,6 +22,7 @@
     "lint": "eslint .",
     "smoke:mcp": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/smoke-mcp.ts",
     "test": "vitest run",
+    "test:reliability": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/reliability/run-reliability.ts",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

@@ -29,6 +29,11 @@ export async function evaluationMetrics() {
   const events = tasks.flatMap((task) => task.events);
   const tests = tasks.flatMap((task) => task.testRuns);
   const byRole = (role: string) => agentRuns.filter((run) => run.role === role);
+  const countEvents = (type: string) => events.filter((item) => item.type === type).length;
+  const leaseAcquisitionsByTask = new Map<string, number>();
+  for (const item of events.filter((event) => event.type === "LEASE_ACQUIRED")) {
+    leaseAcquisitionsByTask.set(item.taskId, (leaseAcquisitionsByTask.get(item.taskId) ?? 0) + 1);
+  }
 
   const attempted = tasks.filter((task) => task.reproductionReport !== null);
   const reproduced = attempted.filter(
@@ -101,6 +106,22 @@ export async function evaluationMetrics() {
       scopeViolations: events.filter((item) => item.type === "SCOPE_VIOLATION").length,
       toolFailures: events.filter((item) => item.type === "TOOL_FAILED").length,
       approvalBypassAttempts: 0,
+    },
+
+    reliability: {
+      leaseAcquisitions: countEvents("LEASE_ACQUIRED"),
+      leaseContention: countEvents("LEASE_CLAIM_REJECTED"),
+      staleExecutionsRejected: countEvents("STALE_EXECUTION_REJECTED"),
+      staleWritesRejected: countEvents("STALE_WRITE_REJECTED"),
+      checkpointsRecovered: countEvents("CHECKPOINT_RECOVERED"),
+      publicationsRecovered: countEvents("PUBLICATION_RECOVERED"),
+      tasksWithMultipleLeaseAcquisitions: [...leaseAcquisitionsByTask.values()].filter((count) => count > 1)
+        .length,
+      meanCheckpointRecoveryMs: mean(
+        events
+          .filter((item) => item.type === "CHECKPOINT_RECOVERED" && item.durationMs !== null)
+          .map((item) => item.durationMs as number),
+      ),
     },
 
     efficiency: {

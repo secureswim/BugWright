@@ -29,6 +29,10 @@ export function currentTaskLease() {
   return context.getStore();
 }
 
+async function recordRejection(taskId: string, type: string, title: string) {
+  await db.taskEvent.create({ data: { taskId, type, title, status: "DENIED" } }).catch(() => {});
+}
+
 export async function claimTaskLease(taskId: string, owner: string, states: TaskState[]) {
   const now = new Date();
   const leaseExpiresAt = new Date(now.getTime() + duration("BUGWRIGHT_LEASE_MS", DEFAULT_LEASE_MS, 5_000));
@@ -46,7 +50,15 @@ export async function claimTaskLease(taskId: string, owner: string, states: Task
       version: { increment: 1 },
     },
   });
-  if (claimed.count !== 1) return null;
+  if (claimed.count !== 1) {
+    const active = await db.task.findFirst({
+      where: { id: taskId, leaseOwner: { not: null }, leaseExpiresAt: { gt: now } },
+      select: { id: true },
+    });
+    if (active)
+      await recordRejection(taskId, "LEASE_CLAIM_REJECTED", "Concurrent worker was denied the task lease");
+    return null;
+  }
   const task = await db.task.findUniqueOrThrow({
     where: { id: taskId },
     select: { leaseOwner: true, leaseGeneration: true },
@@ -97,7 +109,10 @@ export async function assertTaskLease(taskId = currentTaskLease()?.taskId) {
     },
     select: { id: true },
   });
-  if (!task) throw new LeaseLostError(taskId);
+  if (!task) {
+    await recordRejection(taskId, "STALE_EXECUTION_REJECTED", "Stale worker execution was fenced out");
+    throw new LeaseLostError(taskId);
+  }
   return lease;
 }
 
@@ -113,7 +128,10 @@ export async function updateTaskWithLease(taskId: string, data: Prisma.TaskUpdat
     },
     data: { ...data, version: { increment: 1 } },
   });
-  if (updated.count !== 1) throw new LeaseLostError(taskId);
+  if (updated.count !== 1) {
+    await recordRejection(taskId, "STALE_WRITE_REJECTED", "Stale worker task update was fenced out");
+    throw new LeaseLostError(taskId);
+  }
 }
 
 export async function transactionWithTaskLease<T>(
@@ -122,19 +140,25 @@ export async function transactionWithTaskLease<T>(
 ) {
   const lease = currentTaskLease();
   if (!lease || lease.taskId !== taskId) throw new LeaseLostError(taskId);
-  return db.$transaction(async (transaction) => {
-    const guarded = await transaction.task.updateMany({
-      where: {
-        id: taskId,
-        leaseOwner: lease.owner,
-        leaseGeneration: lease.generation,
-        leaseExpiresAt: { gt: new Date() },
-      },
-      data: { version: { increment: 1 } },
+  try {
+    return await db.$transaction(async (transaction) => {
+      const guarded = await transaction.task.updateMany({
+        where: {
+          id: taskId,
+          leaseOwner: lease.owner,
+          leaseGeneration: lease.generation,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: { version: { increment: 1 } },
+      });
+      if (guarded.count !== 1) throw new LeaseLostError(taskId);
+      return work(transaction, lease);
     });
-    if (guarded.count !== 1) throw new LeaseLostError(taskId);
-    return work(transaction, lease);
-  });
+  } catch (error) {
+    if (error instanceof LeaseLostError)
+      await recordRejection(taskId, "STALE_WRITE_REJECTED", "Stale worker transaction was fenced out");
+    throw error;
+  }
 }
 
 export async function releaseTaskLease(lease: TaskLease) {

@@ -244,6 +244,16 @@ crashed process. Publication uses a durable idempotency record and recovers an
 existing matching branch or pull request instead of creating a duplicate.
 See [docs/fenced-execution.md](docs/fenced-execution.md).
 
+The failure path is exercised by two real worker processes against PostgreSQL:
+
+```bash
+npm run test:reliability
+```
+
+One worker is deliberately wedged until its lease expires; a replacement takes
+over, and the test proves the stale process cannot overwrite its result. See
+[docs/reliability-testing.md](docs/reliability-testing.md).
+
 ## Evaluation
 
 `GET /metrics` computes everything from persisted runs. The number to read
@@ -254,6 +264,10 @@ completions rest only on "nothing else broke".
 `efficiency` reports real input and output tokens, cost per resolved issue, and
 peak context per role measured across the whole conversation including tool
 results — not the size of the opening payload.
+
+`reliability` reports lease contention, stale writes and executions rejected,
+checkpoint and publication recoveries, repeated acquisitions, and recovery
+duration.
 
 Tasks carry an `executionMode` so the same schema can compare `MULTI_AGENT`
 against a `SINGLE_AGENT` baseline. **That baseline is not implemented yet, so
@@ -270,6 +284,8 @@ dishonest. The protocol for running that comparison is in
   gaps that are still open
 - [docs/fenced-execution.md](docs/fenced-execution.md) — worker leases,
   checkpoint restoration, and publication recovery
+- [docs/reliability-testing.md](docs/reliability-testing.md) — executable fault
+  injection and the multi-process PostgreSQL takeover probe
 - [docs/decisions/](docs/decisions/) — ADRs, including why five roles became
   six and why the state machine overrides the model
 - [evaluations/README.md](evaluations/README.md) — the measurement protocol
