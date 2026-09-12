@@ -24,19 +24,16 @@ wrote, and a human approves a cryptographic fingerprint rather than a summary.
 | What happens after a crash?  | A higher lease generation takes over, restores a verified checkpoint and fences out the stale worker |
 | What is tested?              | 311 offline tests, Windows/Linux CI and a real two-process PostgreSQL recovery probe                 |
 
-## Demo
+## Demo[Click the preview to watch the current walkthrough on YouTube]
 
 [![Watch BugWright take a GitHub issue to a tested patch](https://img.youtube.com/vi/lwb5g1JTKYM/maxresdefault.jpg)](https://www.youtube.com/watch?v=lwb5g1JTKYM)
 
-Click the preview to watch the current walkthrough on YouTube.
 
 A full run: the issue comes in, the Researcher diagnoses it, the Reproducer
 writes a test that fails, the Coder patches, the Tester proves the test now
 passes, and an independent Reviewer signs off before a human authorizes the
 pull request. Click to play on YouTube.
 
-The repository also includes a timed [two-minute demo script](docs/demo-script.md)
-covering the reproduction proof, approval boundary and crash-recovery result.
 
 ```mermaid
 flowchart TD
