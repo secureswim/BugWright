@@ -1,5 +1,8 @@
 # BugWright
 
+[![CI](https://github.com/secureswim/BugWright/actions/workflows/ci.yml/badge.svg)](https://github.com/secureswim/BugWright/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Six agents, separated by authority. The one that writes the patch cannot run
 it, review it, or ship it.**
 
@@ -9,14 +12,31 @@ can fix a bug — it is the boundaries around it: no patch is accepted until a
 test that **failed before it** passes after it, no agent can execute code it
 wrote, and a human approves a cryptographic fingerprint rather than a summary.
 
-## Demo [Click on the Image to watch it on YouTube]
+## At a glance
+
+| Question                     | Answer                                                                                               |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
+| What goes in?                | A public GitHub repository and issue                                                                 |
+| What comes out?              | A reproduced, tested and independently reviewed patch; optionally a draft PR                         |
+| What proves the fix?         | The reproduction fails before the patch and passes afterward                                         |
+| What limits an agent?        | Capability-scoped MCP servers and a deterministic state machine                                      |
+| What does the human approve? | A SHA-256 fingerprint of exact source bytes, destination and test evidence                           |
+| What happens after a crash?  | A higher lease generation takes over, restores a verified checkpoint and fences out the stale worker |
+| What is tested?              | 311 offline tests, Windows/Linux CI and a real two-process PostgreSQL recovery probe                 |
+
+## Demo
 
 [![Watch BugWright take a GitHub issue to a tested patch](https://img.youtube.com/vi/lwb5g1JTKYM/maxresdefault.jpg)](https://www.youtube.com/watch?v=lwb5g1JTKYM)
+
+Click the preview to watch the current walkthrough on YouTube.
 
 A full run: the issue comes in, the Researcher diagnoses it, the Reproducer
 writes a test that fails, the Coder patches, the Tester proves the test now
 passes, and an independent Reviewer signs off before a human authorizes the
 pull request. Click to play on YouTube.
+
+The repository also includes a timed [two-minute demo script](docs/demo-script.md)
+covering the reproduction proof, approval boundary and crash-recovery result.
 
 ```mermaid
 flowchart TD
@@ -135,9 +155,13 @@ Next.js 15 · React 19 · TypeScript · Fastify with SSE · PostgreSQL 17 · Pri
 · pg-boss · the official MCP TypeScript SDK over stdio · Docker · GitHub App or
 fine-grained token for publishing.
 
+For the component and sequence diagrams, trust boundaries and recovery path,
+see the [architecture overview](docs/architecture-overview.md).
+
 ## Run it
 
-Docker is required. PostgreSQL and the API bind to `127.0.0.1`.
+Prerequisites: Node.js 22, Docker with Compose, Git and one supported model API
+key. PostgreSQL and the API bind to `127.0.0.1`.
 
 ```bash
 cp .env.example .env          # add one model API key
@@ -221,8 +245,9 @@ BUGWRIGHT_REPLAY=1 npm test        # replay forever, free
   changed source or evidence byte invalidates approval.
 - **Publication uses captured bytes.** The publisher uploads the reviewed
   artifact, verifies GitHub produced the expected tree, and only then creates
-  a commit. Existing branches and open PRs are reused on retries. Exactly-once
-  worker execution remains future work.
+  a commit. Existing branches and open PRs are reused on retries. Execution is
+  at-least-once with idempotent recovery; stale writes are prevented with
+  fencing rather than an inaccurate exactly-once claim.
 
 Prompt injection is treated as something that _will_ sometimes succeed, so the
 controls above do not depend on the model refusing it — see
@@ -278,6 +303,8 @@ dishonest. The protocol for running that comparison is in
 
 ## Documentation
 
+- [docs/architecture-overview.md](docs/architecture-overview.md) — presentation-level
+  component, control-flow and recovery diagrams
 - [docs/architecture.md](docs/architecture.md) — states, transitions, and how
   the pieces fit
 - [docs/threat-model.md](docs/threat-model.md) — adversaries, controls, and the
@@ -291,3 +318,5 @@ dishonest. The protocol for running that comparison is in
 - [evaluations/README.md](evaluations/README.md) — the measurement protocol
 - [fixtures/README.md](fixtures/README.md) — the corpus, including the two
   fixtures where the correct behaviour is to **refuse**
+- [docs/demo-script.md](docs/demo-script.md) — a two-minute recording plan and
+  narration

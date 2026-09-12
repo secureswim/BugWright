@@ -112,8 +112,9 @@ Reviewer findings supersede Coder confidence. Research synthesis is instructed
 to preserve conflicting root causes in `risks` rather than average them — a
 disagreement between researchers is signal.
 
-Maximum three test attempts and two revision cycles. At the limit the evidence
-stays visible in `NEEDS_ATTENTION` rather than being discarded.
+By default, a task allows five test attempts and four revision cycles, with
+separate caps on agent runs, model calls and total duration. At the limit the
+evidence stays visible in `NEEDS_ATTENTION` rather than being discarded.
 
 ## Recovery
 
