@@ -42,7 +42,15 @@ export const taskStates = [
 ] as const;
 export type TaskState = (typeof taskStates)[number];
 
-export const agentRoles = ["MANAGER", "RESEARCHER", "REPRODUCER", "CODER", "TESTER", "REVIEWER"] as const;
+export const agentRoles = [
+  "MANAGER",
+  "RESEARCHER",
+  "REPRODUCER",
+  "CODER",
+  "TESTER",
+  "REVIEWER",
+  "SINGLE_AGENT",
+] as const;
 export type AgentRole = (typeof agentRoles)[number];
 
 export type ResearchTaskType = "implementation" | "tests" | "history";
@@ -280,3 +288,93 @@ export type AgentEventPayload = {
   input?: unknown;
   output?: unknown;
 };
+
+/** Entities and edges extracted from repository syntax; these are untrusted code metadata. */
+export interface GraphEntity {
+  id: string;
+  kind: "class" | "function" | "variable";
+  name: string;
+  qualifiedName: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  documentation?: string;
+  signature?: string;
+}
+export type GraphRelationshipKind =
+  "defines" | "imports" | "calls" | "inherits" | "implements" | "contains" | "references";
+export interface GraphRelationship {
+  kind: GraphRelationshipKind;
+  source: string;
+  target: string;
+  filePath: string;
+  line: number;
+}
+export type ContentTrust = "trusted" | "untrusted" | "system";
+export interface TaggedContent {
+  trust: ContentTrust;
+  source: string;
+  content: string;
+  hash: string;
+}
+export interface ContentSummary {
+  source: string;
+  metadata: Record<string, string | number | boolean>;
+  originalLength: number;
+  hash: string;
+}
+
+export interface SWEBenchInstance {
+  instance_id: string;
+  repo: string;
+  base_commit: string;
+  problem_statement: string;
+  hints_text: string;
+  test_patch: string;
+  patch: string;
+  version: string;
+  FAIL_TO_PASS: string;
+  PASS_TO_PASS: string;
+  environment_setup_commit: string;
+}
+export interface OracleEvidence {
+  passed: string[];
+  failed: string[];
+}
+export interface OracleResult {
+  resolved: boolean;
+  verifiedResolved: boolean;
+  oracleMatch: boolean;
+  falsePositive: boolean;
+  oracleAvailable: boolean;
+  goldPassed: boolean;
+}
+export interface HarnessInstanceResult extends OracleResult {
+  instanceId: string;
+  taskId: string;
+  status: string;
+  costUsd: number;
+  durationMs: number;
+  modelCalls: number;
+  revisionCycles: number;
+  error?: string;
+  oracleError?: string;
+}
+export interface HarnessResults {
+  runId: string;
+  executionMode: "MULTI_AGENT" | "SINGLE_AGENT";
+  dataset: "swe-bench-verified" | "swe-bench-lite";
+  instanceCount: number;
+  resolved: number;
+  resolvedRate: number;
+  verifiedResolved: number;
+  verifiedResolvedRate: number;
+  oracleMatchRate: number;
+  falsePositiveRate: number;
+  meanCostUsd: number;
+  meanDurationMs: number;
+  meanModelCalls: number;
+  oracleEvaluatedCount: number;
+  goldResolvedRate: number;
+  perInstance: HarnessInstanceResult[];
+}

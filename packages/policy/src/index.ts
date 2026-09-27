@@ -69,7 +69,8 @@ export function approvalHash(input: {
 /* Role and tool authority                                                     */
 /* -------------------------------------------------------------------------- */
 
-export type ToolRole = "MANAGER" | "RESEARCHER" | "REPRODUCER" | "CODER" | "TESTER" | "REVIEWER";
+export type ToolRole =
+  "MANAGER" | "RESEARCHER" | "REPRODUCER" | "CODER" | "TESTER" | "REVIEWER" | "SINGLE_AGENT";
 
 const READ_TOOLS = [
   "repository.list_tree",
@@ -92,7 +93,24 @@ const GIT_INSPECTION = ["git.get_status", "git.get_diff", "git.get_changed_files
 export const roleToolPermissions: Record<ToolRole, ReadonlySet<string>> = {
   // The Manager orchestrates and has no repository access at all.
   MANAGER: new Set(),
-  RESEARCHER: new Set([...READ_TOOLS, ...GIT_INSPECTION, "git.get_history"]),
+  RESEARCHER: new Set([
+    ...READ_TOOLS,
+    ...GIT_INSPECTION,
+    "git.get_history",
+    ...["query_entity", "find_callers", "find_callees", "find_references", "class_hierarchy"].map(
+      (tool) => `knowledge-graph.${tool}`,
+    ),
+  ]),
+  SINGLE_AGENT: new Set([
+    ...READ_TOOLS,
+    ...GIT_INSPECTION,
+    "git.get_history",
+    "repository.apply_patch",
+    "repository.write_test_file",
+    ...["query_entity", "find_callers", "find_callees", "find_references", "class_hierarchy"].map(
+      (tool) => `knowledge-graph.${tool}`,
+    ),
+  ]),
   // The Reproducer may create test files, but cannot touch application source
   // and cannot execute anything. See `assertTestPath`.
   REPRODUCER: new Set([...READ_TOOLS, ...GIT_INSPECTION, "repository.write_test_file"]),
@@ -224,6 +242,7 @@ export function assertTestPath(pathname: string) {
  * needs to do its job.
  */
 const SERVER_ENV_ALLOWLIST: Record<string, string[]> = {
+  "knowledge-graph": ["BUGWRIGHT_REPO_ROOT"],
   repository: ["BUGWRIGHT_REPO_ROOT"],
   git: ["BUGWRIGHT_REPO_ROOT"],
   runner: [

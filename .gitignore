@@ -14,3 +14,4 @@ coverage/
 # carried a live API key into a commit.
 .env.*
 !.env.example
+.npm-cache/

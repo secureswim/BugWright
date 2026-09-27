@@ -157,6 +157,10 @@ Every run records role status, model calls, retries, tool calls, real input and
 output tokens, cost, peak context, duration, delegation cycles, revision
 cycles, failed checks, denials, and approval state.
 
-`executionMode` lets the same schema serve a future `SINGLE_AGENT` baseline.
-That baseline is deliberately not enabled, so no improvement is claimed before
-it has been measured — see [../evaluations/README.md](../evaluations/README.md).
+The `SINGLE_AGENT` execution mode uses one model authority pool and the Coder provider. The orchestrator still verifies the failing reproduction, protects its bytes, runs regression checks, hashes the artifact and requires human approval. It skips the research scope guard and independent model review. See [../evaluations/README.md](../evaluations/README.md) for comparison and benchmark commands.
+
+## Structural quarantine and semantic navigation
+
+Issue strings and repository tool results are tagged and hashed at their boundaries. Repository-reading model contexts receive escaped `<untrusted-content>` payloads, including tool errors, diffs, and externally derived test output. Escaping prevents embedded closing tags from forging a new boundary. Manager issue contexts contain deterministic summaries only; routing contexts omit raw runner output. Labels provide provenance and cannot guarantee that a model will resist every injection; deterministic tool gates, test verification and approval checks remain the enforcement mechanisms.
+
+The Researcher can query a cached Tree-sitter knowledge graph for TypeScript, JavaScript and Python entities, callers, callees, references and class hierarchy. The graph MCP process receives an allowlisted environment, exposes only gated query tools, and refreshes changed files internally. This is static navigation: unresolved dynamic dispatch and re-exports are omitted rather than guessed.

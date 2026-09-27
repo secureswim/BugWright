@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@bugwright/agent": "*",
+    "@bugwright/shared": "*",
     "@bugwright/database": "*"
   }
 }

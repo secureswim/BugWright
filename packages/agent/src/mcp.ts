@@ -1,3 +1,4 @@
+import { tagContent } from "./quarantine.js";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -13,7 +14,7 @@ import {
 } from "@bugwright/policy";
 import { projectRoot } from "./runtime.js";
 
-export type ServerName = "repository" | "git" | "runner" | "github";
+export type ServerName = "repository" | "git" | "runner" | "github" | "knowledge-graph";
 
 /** Roles that connect to MCP servers. The Manager has no tools at all. */
 const TOOL_ROLES: ToolRole[] = ["RESEARCHER", "REPRODUCER", "CODER", "TESTER", "REVIEWER"];
@@ -60,7 +61,7 @@ export class McpTools {
 
   async protectReproduction(testPath: string) {
     this.protectedTest = testPath;
-    for (const role of TOOL_ROLES) {
+    for (const role of [...TOOL_ROLES, "SINGLE_AGENT" as const]) {
       const key = clientKey(role, "repository");
       const client = this.clients.get(key);
       if (!client) continue;
@@ -185,6 +186,7 @@ export class McpTools {
         .filter((item) => item.type === "text")
         .map((item) => item.text ?? "")
         .join("\n");
+      const tagged = tagContent(raw, server === "runner" ? "trusted" : "untrusted", `${server}.${name}`);
       if (result.isError) throw new Error(raw || `${name} failed`);
       await db.taskEvent.create({
         data: {
@@ -198,6 +200,7 @@ export class McpTools {
           iteration,
           input: sanitizeInput(args) as never,
           output: {
+            trust: tagged.trust,
             resultChars: raw.length,
             resultHash: createHash("sha256").update(raw).digest("hex").slice(0, 16),
           },

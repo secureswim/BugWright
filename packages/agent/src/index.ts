@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, cp, mkdir, rm, readFile } from "node:fs/promises";
+import { access, cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import {
@@ -28,11 +28,13 @@ import {
   restoreArtifact,
   assertReproduction,
   artifactApprovalHash,
-  sha256,
   type ReproductionProof,
   type ReviewArtifact,
 } from "@bugwright/policy";
 import { McpTools, parseToolJson } from "./mcp.js";
+import { createReproductionVerifier } from "./reproduction-verifier.js";
+import { executeSingleAgent } from "./single-agent.js";
+import { cloneArguments, pinnedCommit } from "./preparation.js";
 import {
   coder,
   managerDecide,
@@ -50,7 +52,6 @@ import {
   routeAfterTest,
 } from "./state-machine.js";
 import { assessScope } from "./scope.js";
-import { detectTransformError } from "@bugwright/adapters";
 import { runBoundedParallel } from "./parallel.js";
 import { projectRoot, workspaceRoot as configuredWorkspaceRoot } from "./runtime.js";
 
@@ -93,6 +94,10 @@ async function prepare(
   workspaceRoot: string,
 ) {
   if (task.workspacePath === repoRoot && task.baseCommit && (await exists(path.join(repoRoot, ".git")))) {
+    const current = await command("git", ["rev-parse", "HEAD"], repoRoot);
+    if (current.code !== 0 || current.stdout.trim().toLowerCase() !== pinnedCommit(task.baseCommit)) {
+      throw new Error("The resumed workspace HEAD does not match its pinned base commit");
+    }
     return task.baseCommit;
   }
   await rm(repoRoot, { recursive: true, force: true });
@@ -110,26 +115,27 @@ async function prepare(
   } else {
     const cloned = await command(
       "git",
-      [
-        "-c",
-        "core.autocrlf=false",
-        "clone",
-        "--depth",
-        "1",
-        "--branch",
-        task.baseBranch,
-        "--",
-        task.repositoryUrl,
-        repoRoot,
-      ],
+      cloneArguments(task.repositoryUrl, task.baseBranch, repoRoot, task.baseCommit),
       workspaceRoot,
     );
     if (cloned.code !== 0) throw new Error(`Clone failed: ${cloned.stderr.slice(-2000)}`);
+    const pinned = pinnedCommit(task.baseCommit);
+    if (pinned) {
+      const fetched = await command("git", ["fetch", "--depth", "1", "origin", pinned], repoRoot);
+      if (fetched.code !== 0) throw new Error(`Pinned commit fetch failed: ${fetched.stderr.slice(-2000)}`);
+      const checkedOut = await command("git", ["checkout", "--detach", pinned], repoRoot);
+      if (checkedOut.code !== 0)
+        throw new Error(`Pinned commit checkout failed: ${checkedOut.stderr.slice(-2000)}`);
+    }
   }
 
   const head = await command("git", ["rev-parse", "HEAD"], repoRoot);
   if (head.code !== 0) throw new Error("Could not resolve base commit");
-  return head.stdout.trim();
+  const resolved = head.stdout.trim();
+  if (!task.demoMode && task.baseCommit && resolved.toLowerCase() !== pinnedCommit(task.baseCommit)) {
+    throw new Error("The prepared HEAD does not match the pinned base commit");
+  }
+  return resolved;
 }
 
 /** Rebuilds the attempt log from persisted messages, so resume keeps it. */
@@ -202,11 +208,7 @@ async function executeTask(taskId: string) {
   const startingAgentRuns = await db.agentRun.count({ where: { taskId } });
 
   if (task.executionMode === "SINGLE_AGENT") {
-    await state(
-      taskId,
-      "NEEDS_ATTENTION",
-      "Single-agent baseline runner is scaffolded for evaluation but not enabled yet",
-    );
+    await executeSingleAgent(taskId);
     return;
   }
 
@@ -235,7 +237,13 @@ async function executeTask(taskId: string) {
     await updateTaskWithLease(taskId, { workspacePath: repoRoot, baseCommit: base, error: null });
 
     mcp = new McpTools(taskId, repoRoot);
-    await mcp.connect(["repository", "git", "runner", ...(!task.issueTitle ? (["github"] as const) : [])]);
+    await mcp.connect([
+      "repository",
+      "git",
+      "runner",
+      "knowledge-graph",
+      ...(!task.issueTitle ? (["github"] as const) : []),
+    ]);
 
     let title = task.issueTitle;
     let body = task.issueBody ?? "";
@@ -360,70 +368,14 @@ async function executeTask(taskId: string) {
       // Verification runs through the Tester's runner authority, invoked by the
       // Manager. The Reproducer writes the test; it cannot execute anything,
       // so it cannot certify its own work.
-      const verify = async (testPath: string) => {
-        const baseline = await captureArtifact(repoRoot, base);
-        reproductionBaseline = baseline;
-        const testHash = sha256(await readFile(resolveInside(repoRoot, testPath)));
-        if (!baseline.files.some((file) => file.path === testPath && file.sha256 === testHash)) {
-          throw new Error("The reproduction test must be a captured, non-ignored change");
-        }
-        const selection = parseToolJson<{ status: string; project?: { projectPath: string } }>(
-          await mcp!.call("TESTER", "runner", "select_project", { changedFiles: [testPath] }, 0),
-        );
-        if (selection.status !== "selected" || !selection.project) {
-          return { failed: false, output: "No verifiable project detected", ran: false };
-        }
-        const projectPath = selection.project.projectPath;
-        await mcp!.call("TESTER", "runner", "prepare_dependencies", { projectPath }, 0);
-        const result = parseToolJson<{
-          status: string;
-          exitCode?: number;
-          stdout?: string;
-          stderr?: string;
-          noTestsCollected?: boolean;
-          command?: string;
-          durationMs?: number;
-        }>(await mcp!.call("TESTER", "runner", "run_test", { projectPath, only: testPath }, 0));
-        if (result.status !== "ran") {
-          return { failed: false, output: "The reproduction test could not be executed", ran: false };
-        }
-        const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-        await assertArtifactCurrent(repoRoot, baseline);
-        // A runner that collected no tests also exits non-zero. Treating that
-        // as a failing test would record a reproduction that never ran.
-        if (result.noTestsCollected || detectTransformError(output)) {
-          return {
-            failed: false,
-            output:
-              `The test runner could not collect or parse ${testPath}, so it never ran. ` +
-              `Check that the file extension matches its contents.\n${output}`,
-            ran: false,
-          };
-        }
-        if (typeof result.exitCode !== "number" || result.exitCode < 0) {
-          return { failed: false, output: "No valid test exit status", ran: false };
-        }
-        const evidence = await db.testRun.create({
-          data: {
-            taskId,
-            artifactHash: baseline.hash,
-            kind: "reproduction-before",
-            command: result.command ?? "reproduction",
-            exitCode: result.exitCode,
-            stdout: result.stdout ?? "",
-            stderr: result.stderr ?? "",
-            durationMs: result.durationMs ?? 0,
-          },
-        });
-        if (result.exitCode !== 0)
-          reproductionProof = {
-            path: testPath,
-            sha256: testHash,
-            baselineArtifactHash: baseline.hash,
-            testRunId: evidence.id,
-          };
-        return { failed: result.exitCode !== 0, output, ran: true };
-      };
+      const verify = createReproductionVerifier(taskId, repoRoot, base, mcp, {
+        onBaseline: (artifact) => {
+          reproductionBaseline = artifact;
+        },
+        onProof: (proof) => {
+          reproductionProof = proof;
+        },
+      });
 
       // Read the project's test layout before writing anything, so the
       // Reproducer is told where tests live rather than guessing.
@@ -881,5 +833,5 @@ export { RoleModel, GeminiModel, type AgentModel } from "./model.js";
 export { resolveProvider, reviewerIsIndependent, parseSpec, type ModelRole } from "./model/registry.js";
 export { FakeProvider, ReplayProvider, RecordingProvider } from "./model/index.js";
 export { assessScope, changedFilesFromDiff, changedFilesFromNameStatus } from "./scope.js";
-export { attemptHistory };
+export { attemptHistory, prepare, state, event };
 export { validateReviewPackage } from "./review-artifact.js";

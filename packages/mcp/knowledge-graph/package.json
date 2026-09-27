@@ -1,0 +1,21 @@
+{
+  "name": "@bugwright/mcp-knowledge-graph",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@bugwright/policy": "*",
+    "@bugwright/shared": "*",
+    "@modelcontextprotocol/sdk": "^1.17.5",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-typescript": "^0.23.2",
+    "tree-sitter-python": "~0.21.0",
+    "tree-sitter-javascript": "^0.23.1",
+    "zod": "^3.25.76"
+  }
+}
