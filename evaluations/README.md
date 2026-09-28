@@ -2,14 +2,11 @@
 
 ## What is and is not claimed
 
-BugWright makes **no performance claim over a single-agent baseline.** The
-baseline runner is scaffolded (`executionMode: "SINGLE_AGENT"`) but not
-implemented, so there is nothing to compare against yet.
-
-This is deliberate. A multi-agent system that reports a resolution rate with no
-baseline is reporting a number that cannot be interpreted — and quietly
-implying an improvement it never measured. The scaffold exists so the same
-persistence and metrics schema serves both arms when the comparison is run.
+BugWright makes **no performance claim over a single-agent baseline** until a
+controlled comparison has been run. Both modes are implemented. The baseline
+uses the Coder provider and deterministic reproduction and regression checks,
+with artifact hashing and human approval. It skips independent research scope
+checks and model review; report those differences with the comparison.
 
 ## Read `verifiedFixRate` first
 
@@ -89,10 +86,8 @@ See [../fixtures/README.md](../fixtures/README.md). Two of the four fixtures
 expect BugWright to **refuse**, which is the property most benchmarks never
 measure: whether the system knows when to stop.
 
-A serious comparison needs 10–15 fixtures with hidden regression tests. Public
-benchmarks such as SWE-bench are deliberately not used here — a mediocre score
-on a famous benchmark is less informative than a well-controlled comparison on
-a corpus whose expected outcomes are documented.
+Fixture comparisons measure refusal and safety alongside correctness. The
+SWE-bench harness below adds official gold tests on public benchmark instances.
 
 ## Reproducibility
 
@@ -112,3 +107,22 @@ alongside the results.
 Publish the losses. If multi-agent is slower and more expensive for a
 comparable resolution rate, that is the finding — and it is a more useful one
 than a table where every column happens to favour the arm the author built.
+
+## SWE-bench harness
+
+Install workspace dependencies, generate Prisma, configure PostgreSQL and model credentials as for normal BugWright runs, and build the runner images. Download a JSONL export of the [Verified dataset](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified). The loader validates each record and supports repo and instance filters.
+
+The gold oracle additionally requires Python with the official `swebench` package and Docker available to that interpreter. See the [official evaluator setup](https://www.swebench.com/SWE-bench/guides/evaluation/). It runs in a separate benchmark checkout; neither gold patches nor gold tests enter agent conversations. Oracle failures are recorded explicitly and do not become successful gold results.
+
+Run from the repository root:
+
+```bash
+npm run harness -w @bugwright/evaluation-harness -- run --dataset evaluations/verified.jsonl --instances django__django-11099 --mode multi_agent --repeats 3
+npm run harness -w @bugwright/evaluation-harness -- run --dataset evaluations/verified.jsonl --instances django__django-11099 --mode single_agent --repeats 3
+npm run harness -w @bugwright/evaluation-harness -- compare --runs <multi-run-id>,<single-run-id>
+npm run harness -w @bugwright/evaluation-harness -- report --run <run-id>
+```
+
+Each repeat creates a distinct run ID, with sequential instances and incremental JSON results in `evaluations/results/`. Use `--repo owner/repo` to filter and `--dataset-kind swe-bench-lite` for Lite. `--python` selects the Python executable. Historical checkouts pin `base_commit`; the repository's resolved default branch remains the human approval target.
+
+`verifiedResolvedRate` is the requested headline: resolved instances whose BugWright reproduction passed after the fix, divided by all instances. `soundness.verifiedFixRate` instead divides by completed tasks. Report `goldResolvedRate` and `oracleEvaluatedCount` alongside the headline: internal verification is distinct from official gold test success. Missing oracle evidence is unknown, not a false positive or a gold success. `oracleMatchRate` requires exact test identities observed failing before and passing after in verbose reproduction output; quiet output and semantically similar newly written tests cannot establish that identity match. Preserve per-instance errors, failed runs, costs and repeat spread when publishing a comparison.

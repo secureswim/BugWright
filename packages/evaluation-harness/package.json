@@ -1,0 +1,21 @@
+{
+  "name": "@bugwright/evaluation-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "harness": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@bugwright/agent": "*",
+    "@bugwright/database": "*",
+    "@bugwright/evaluation": "*",
+    "@bugwright/shared": "*",
+    "@bugwright/policy": "*",
+    "zod": "^3.25.76"
+  }
+}

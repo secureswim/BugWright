@@ -1,3 +1,4 @@
+import { tagContent, summarizeForManager, quarantineData } from "./quarantine.js";
 import {
   AttemptRecord,
   PatchProposal,
@@ -19,7 +20,7 @@ import {
  */
 
 export const researchContext = (issue: unknown, task: ResearchTask) => ({
-  issue,
+  issue: wrapIssue(issue),
   researchTask: task,
 });
 
@@ -29,9 +30,10 @@ export const reproducerContext = (
   /** Read from the project's test config and existing tests, not guessed. */
   testConventions?: unknown,
 ) => ({
-  issue,
+  issue: wrapIssue(issue),
   researchReports: reports,
-  testConventions: testConventions ?? null,
+  testConventions:
+    testConventions === undefined ? null : quarantineData(testConventions, "repository.test_config"),
   constraints: {
     writeTestsOnly: true,
     mustFailBeforeFix: true,
@@ -50,10 +52,12 @@ export const coderContext = (
     attempts?: AttemptRecord[];
   } = {},
 ) => ({
-  issue,
+  issue: wrapIssue(issue),
   researchReports,
-  reproduction: options.reproduction ?? null,
-  revisionEvidence: options.revisionEvidence ?? null,
+  reproduction: quarantineReproduction(options.reproduction),
+  revisionEvidence: options.revisionEvidence
+    ? quarantineData(options.revisionEvidence, "verification_evidence")
+    : null,
   previousAttempts: options.attempts ?? [],
   codingConstraints: {
     minimalPatch: true,
@@ -65,9 +69,9 @@ export const coderContext = (
 });
 
 export const testerContext = (issue: unknown, patch: PatchProposal, diff: string) => ({
-  issue,
+  issue: wrapIssue(issue),
   codeChangeSummary: patch,
-  currentDiff: diff.slice(0, 50_000),
+  currentDiff: quarantineData(diff.slice(0, 50_000), "git.diff"),
 });
 
 export const reviewerContext = (
@@ -77,9 +81,50 @@ export const reviewerContext = (
   tests: TestReport,
   reproduction?: ReproductionReport | null,
 ) => ({
-  originalIssue: issue,
+  originalIssue: wrapIssue(issue),
   researchReports,
-  currentDiff: diff,
-  testReport: tests,
-  reproduction: reproduction ?? null,
+  currentDiff: quarantineData(diff, "git.diff"),
+  testReport: quarantineData(tests, "runner.test_report"),
+  reproduction: quarantineReproduction(reproduction),
 });
+
+export function wrapIssue(issue: unknown) {
+  if (!issue || typeof issue !== "object") return quarantineData(issue, "issue");
+  return Object.fromEntries(
+    Object.entries(issue).map(([key, value]) => [
+      key,
+      typeof value === "string" || (value !== null && typeof value === "object")
+        ? quarantineData(value, `issue_${key}`)
+        : value,
+    ]),
+  );
+}
+
+function quarantineReproduction(report?: ReproductionReport | null) {
+  return report
+    ? {
+        ...report,
+        ...(report.failureOutput
+          ? { failureOutput: quarantineData(report.failureOutput, "runner.reproduction_before") }
+          : {}),
+      }
+    : null;
+}
+
+export function managerPlanContext(issue: unknown) {
+  const value = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
+  return {
+    issue: Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key + "Summary",
+        summarizeForManager(
+          tagContent(
+            typeof item === "string" ? item : (JSON.stringify(item) ?? ""),
+            "untrusted",
+            `issue_${key}`,
+          ),
+        ),
+      ]),
+    ),
+  };
+}

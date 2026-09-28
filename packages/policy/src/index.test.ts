@@ -273,3 +273,37 @@ describe("secret scoping for MCP servers", () => {
     }
   });
 });
+
+describe("knowledge graph authority", () => {
+  it("exposes semantic queries only to the Researcher", () => {
+    expect(toolsForRole("RESEARCHER", "knowledge-graph")).toEqual([
+      "query_entity",
+      "find_callers",
+      "find_callees",
+      "find_references",
+      "class_hierarchy",
+    ]);
+    for (const role of ["MANAGER", "CODER", "REPRODUCER", "REVIEWER", "TESTER"] as const)
+      expect(() => assertToolAllowed(role, "knowledge-graph", "query_entity")).toThrow();
+    expect(assertToolAllowed("SINGLE_AGENT", "knowledge-graph", "query_entity")).toBe(
+      "knowledge-graph.query_entity",
+    );
+  });
+  it("does not give the graph credentials or database access", () => {
+    expect(
+      environmentForServer("knowledge-graph", {
+        BUGWRIGHT_REPO_ROOT: "/repo",
+        DATABASE_URL: "secret",
+        OPENAI_API_KEY: "secret",
+        GITHUB_TOKEN: "secret",
+      }),
+    ).toEqual({ BUGWRIGHT_REPO_ROOT: "/repo" });
+  });
+  it("allows the baseline to read and write without executing tools", () => {
+    expect(assertToolAllowed("SINGLE_AGENT", "repository", "apply_patch")).toBe("repository.apply_patch");
+    expect(assertToolAllowed("SINGLE_AGENT", "repository", "write_test_file")).toBe(
+      "repository.write_test_file",
+    );
+    expect(() => assertToolAllowed("SINGLE_AGENT", "runner", "run_test")).toThrow();
+  });
+});

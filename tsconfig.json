@@ -1,6 +1,8 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/mcp/knowledge-graph" },
+    { "path": "packages/evaluation-harness" },
     {
       "path": "packages/shared"
     },

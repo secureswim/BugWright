@@ -1,3 +1,4 @@
+import type { HarnessResults } from "@bugwright/shared";
 import { db } from "@bugwright/database";
 import { reviewerIsIndependent } from "@bugwright/agent";
 
@@ -18,7 +19,7 @@ type TestShape = { reproductionFixed?: string } | null;
  * completed task was backed by a test that failed before the patch, and
  * `efficiency`, which reports real tokens and dollars rather than a proxy.
  */
-export async function evaluationMetrics() {
+export async function evaluationMetrics(harnessResults?: HarnessResults) {
   const tasks = await db.task.findMany({
     include: { agentRuns: true, testRuns: true, events: true },
   });
@@ -43,8 +44,61 @@ export async function evaluationMetrics() {
     (task) => (task.testReport as TestShape)?.reproductionFixed === "passed",
   );
 
+  const arm = (mode: string) => {
+    const selected = tasks.filter((task) => task.executionMode === mode);
+    const resolved = selected.filter((task) => ["COMPLETED", "AWAITING_HUMAN_APPROVAL"].includes(task.state));
+    return {
+      count: selected.length,
+      resolvedRate: ratio(resolved.length, selected.length),
+      verifiedFixRate: ratio(
+        resolved.filter((task) => (task.testReport as TestShape)?.reproductionFixed === "passed").length,
+        resolved.length,
+      ),
+      meanCostUsd: mean(selected.map((task) => task.costUsd)),
+      meanDurationMs: mean(selected.map((task) => task.updatedAt.getTime() - task.createdAt.getTime())),
+    };
+  };
+  const multiAgent = arm("MULTI_AGENT");
+  const singleAgent = arm("SINGLE_AGENT");
+  const baseline =
+    multiAgent.count && singleAgent.count
+      ? {
+          multiAgent,
+          singleAgent,
+          delta: {
+            resolvedRateDiff: Number((multiAgent.resolvedRate - singleAgent.resolvedRate).toFixed(3)),
+            verifiedFixRateDiff: Number(
+              (multiAgent.verifiedFixRate - singleAgent.verifiedFixRate).toFixed(3),
+            ),
+            costRatio: ratio(multiAgent.meanCostUsd, singleAgent.meanCostUsd),
+            durationRatio: ratio(multiAgent.meanDurationMs, singleAgent.meanDurationMs),
+          },
+        }
+      : undefined;
   return {
     sampleSize: tasks.length,
+    ...(baseline ? { baseline } : {}),
+    ...(harnessResults
+      ? {
+          benchmark: {
+            dataset: harnessResults.dataset,
+            resolvedRate: harnessResults.resolvedRate,
+            verifiedResolvedRate: harnessResults.verifiedResolvedRate,
+            oracleMatchRate: harnessResults.oracleMatchRate,
+            falsePositiveRate: harnessResults.falsePositiveRate,
+          },
+        }
+      : {}),
+    quarantine: {
+      untrustedContentItems: events.filter(
+        (item) => (item.output as { trust?: string } | null)?.trust === "untrusted",
+      ).length,
+      trustedContentItems: events.filter(
+        (item) => (item.output as { trust?: string } | null)?.trust === "trusted",
+      ).length,
+      managerRawContentExposures: events.filter((item) => item.type === "MANAGER_RAW_CONTENT_EXPOSURE")
+        .length,
+    },
 
     core: {
       resolutionRate: ratio(completed.length, tasks.length),
@@ -73,6 +127,7 @@ export async function evaluationMetrics() {
     },
 
     multiAgent: {
+      knowledgeGraphQueries: events.filter((item) => item.tool?.startsWith("knowledge-graph.")).length,
       researcherSuccessRate: ratio(
         byRole("RESEARCHER").filter((run) => run.status === "COMPLETED").length,
         byRole("RESEARCHER").length,

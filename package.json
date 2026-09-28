@@ -21,6 +21,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "smoke:mcp": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/smoke-mcp.ts",
+    "harness": "tsx packages/evaluation-harness/src/cli.ts",
     "test": "vitest run",
     "test:reliability": "node --require ./scripts/windows-user-shim.cjs --import tsx scripts/reliability/run-reliability.ts",
     "test:watch": "vitest",
