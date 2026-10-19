@@ -29,11 +29,16 @@ export const reproducerContext = (
   reports: ResearchReport[],
   /** Read from the project's test config and existing tests, not guessed. */
   testConventions?: unknown,
+  /** Why earlier tests were rejected, so a retry corrects them instead of repeating them. */
+  previousAttempts?: unknown,
 ) => ({
   issue: wrapIssue(issue),
   researchReports: reports,
   testConventions:
     testConventions === undefined ? null : quarantineData(testConventions, "repository.test_config"),
+  previousReproductionAttempts: previousAttempts
+    ? quarantineData(previousAttempts, "reproduction_feedback")
+    : null,
   constraints: {
     writeTestsOnly: true,
     mustFailBeforeFix: true,

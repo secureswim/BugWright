@@ -84,7 +84,12 @@ vi.mock("../reproduction-verifier.js", () => ({
       return result;
     },
 }));
-import { executeSingleAgent, SINGLE_AGENT_TOOLS, baselineCanRevise } from "../single-agent.js";
+import {
+  executeSingleAgent,
+  SINGLE_AGENT_TOOLS,
+  baselineCanRevise,
+  MAX_REPRODUCTION_TRIES,
+} from "../single-agent.js";
 const repro = { reproduced: true, testPath: "bug.test.ts", explanation: "demonstrates bug", confidence: 1 };
 const patch = { summary: "fixed bug", filesChanged: ["bug.ts"], rationale: "minimal fix", riskNotes: [] };
 const passing = { passed: true, reproductionFixed: "passed", summary: "passes", failures: [] };
@@ -123,6 +128,16 @@ const model = (patches = 1) =>
   );
 
 describe("single-agent baseline", () => {
+  it("retries an unsuccessful saved reproduction after infrastructure recovery", async () => {
+    fake.task.reproductionReport = {
+      ...repro,
+      reproduced: false,
+      blockedReason: "The prior test run could not collect tests",
+    };
+    await executeSingleAgent("task", model());
+    expect(fake.verified).toHaveBeenCalledOnce();
+    expect(fake.task.state).toBe("AWAITING_HUMAN_APPROVAL");
+  });
   it("rejects source writes proposed during the reproduction phase", async () => {
     const provider = new FakeProvider([
       { toolCalls: [{ name: "apply_patch", args: { path: "bug.ts", oldText: "bug", newText: "fix" } }] },
@@ -130,7 +145,8 @@ describe("single-agent baseline", () => {
       { text: JSON.stringify(patch) },
     ]);
     await executeSingleAgent("task", new RoleModel("CODER", provider));
-    expect(fake.call).not.toHaveBeenCalled();
+    // Only the deterministic convention lookup may reach the runner; the rejected patch must not execute.
+    expect((fake.call.mock.calls as unknown as unknown[][]).map((c) => c[2])).toEqual(["select_project"]);
     expect(fake.task.state).toBe("AWAITING_HUMAN_APPROVAL");
   });
   it("registers one unrestricted model authority pool with read, history and mutation tools", async () => {
@@ -144,11 +160,21 @@ describe("single-agent baseline", () => {
   });
   it("overwrites a model's reproduction claim when deterministic verification observes a passing test", async () => {
     fake.verified.mockResolvedValue({ failed: false, ran: true, output: "test passes" });
-    await executeSingleAgent("task", model());
-    expect(fake.verified).toHaveBeenCalledOnce();
+    const provider = new FakeProvider([repro, repro, repro].map((r) => ({ text: JSON.stringify(r) })));
+    await executeSingleAgent("task", new RoleModel("CODER", provider));
+    expect(fake.verified).toHaveBeenCalledTimes(MAX_REPRODUCTION_TRIES);
     expect(fake.task.state).toBe("NEEDS_ATTENTION");
     expect((fake.task.reproductionReport as { reproduced: boolean }).reproduced).toBe(false);
     expect(fake.tester).not.toHaveBeenCalled();
+  });
+  it("accepts a corrected reproduction on a later try", async () => {
+    fake.verified
+      .mockResolvedValueOnce({ failed: false, ran: false, output: "Cannot find module" })
+      .mockResolvedValueOnce({ failed: true, ran: true, output: "assertion failed" });
+    const provider = new FakeProvider([repro, repro, patch].map((r) => ({ text: JSON.stringify(r) })));
+    await executeSingleAgent("task", new RoleModel("CODER", provider));
+    expect(fake.verified).toHaveBeenCalledTimes(2);
+    expect(fake.task.state).toBe("AWAITING_HUMAN_APPROVAL");
   });
   it("records model telemetry with SINGLE_AGENT role through the real offline agent loop", async () => {
     await executeSingleAgent("task", model());

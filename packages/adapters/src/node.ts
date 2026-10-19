@@ -45,11 +45,17 @@ export class NodeAdapter implements LanguageAdapter {
       if (!raw) continue;
 
       let scripts: Record<string, string> = {};
+      let prismaDependency = false;
       try {
-        scripts = ((JSON.parse(raw) as { scripts?: Record<string, string> }).scripts ?? {}) as Record<
-          string,
-          string
-        >;
+        const manifest = JSON.parse(raw) as {
+          scripts?: Record<string, string>;
+          dependencies?: Record<string, string>;
+          devDependencies?: Record<string, string>;
+        };
+        scripts = manifest.scripts ?? {};
+        prismaDependency =
+          Boolean(manifest.dependencies?.["@prisma/client"]) &&
+          Boolean(manifest.dependencies?.prisma || manifest.devDependencies?.prisma);
       } catch {
         // An unparseable package.json is not a Node project we can verify.
         continue;
@@ -73,6 +79,8 @@ export class NodeAdapter implements LanguageAdapter {
         },
         evidence: `package.json with ${packageManager}${hasLockfile ? " and a lockfile" : " and no lockfile"}`,
         testConventions: await detectTestConventions(root, projectPath),
+        prismaSchema:
+          prismaDependency && (await fileExists(root, path.join(prefix, "prisma", "schema.prisma"))),
       });
     }
     return projects;
@@ -97,6 +105,34 @@ export class NodeAdapter implements LanguageAdapter {
       timeoutMs: TEN_MINUTES,
       projectPath: project.projectPath,
     });
+  }
+
+  postInstall(project: DetectedProject): Operation[] | undefined {
+    if (!project.prismaSchema) return undefined;
+    // Do not run the repository's lifecycle hooks during the networked install.
+    // Prisma's dependency package requires its engine download, which npm's
+    // --ignore-scripts deliberately skipped. Run only that locked dependency's
+    // fixed bootstrap during preparation, then generate the client offline.
+    // Prisma otherwise tries its CDN again during generation, even after the
+    // engine package has downloaded the binaries into node_modules.
+    return [
+      configured({
+        argv: ["node", "node_modules/@prisma/engines/scripts/postinstall.js"],
+        network: "bridge",
+        timeoutMs: FIVE_MINUTES,
+        projectPath: project.projectPath,
+      }),
+      configured({
+        argv: ["node", "node_modules/prisma/build/index.js", "generate", "--schema", "prisma/schema.prisma"],
+        env: {
+          PRISMA_QUERY_ENGINE_LIBRARY: `${workdirFor(project.projectPath)}/node_modules/@prisma/engines/libquery_engine-debian-openssl-3.0.x.so.node`,
+          PRISMA_SCHEMA_ENGINE_BINARY: `${workdirFor(project.projectPath)}/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x`,
+        },
+        network: "none",
+        timeoutMs: FIVE_MINUTES,
+        projectPath: project.projectPath,
+      }),
+    ];
   }
 
   test(project: DetectedProject, options: TestOptions = {}): Operation {

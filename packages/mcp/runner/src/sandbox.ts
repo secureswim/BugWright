@@ -33,6 +33,7 @@ export function buildRunArgs(input: {
     "--rm",
     "--network",
     input.command.network,
+    ...Object.entries(input.command.env ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
     "--cpus",
     "2",
     "--memory",

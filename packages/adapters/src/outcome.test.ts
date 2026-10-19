@@ -89,6 +89,10 @@ describe("detectNoTestsCollected", () => {
 describe("detectTransformError", () => {
   it.each([
     ["esbuild JSX in a .ts file", "Error: Transform failed with 1 error:\nsrc/test/login.test.ts:13:12"],
+    [
+      "a pytest collection error",
+      "ERROR collecting tests/test_x.py\nE   ModuleNotFoundError: No module named 'src'\nInterrupted: 1 error during collection",
+    ],
     ["a syntax error", "SyntaxError: Unexpected end of input"],
     ["an unresolved import", 'Error: Failed to resolve import "@/pages/Login" from src/test/a.test.tsx'],
     ["a missing module", "Cannot find module '@/context/AuthContext'"],

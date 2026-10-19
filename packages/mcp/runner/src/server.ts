@@ -189,7 +189,17 @@ server.tool(
     const project = await resolveProject(projectPath);
     // Installation is the one step that writes into the workspace, so it runs
     // without the read-only mount.
-    return execute(adapterFor(project.adapter).install(project), project, false);
+    const adapter = adapterFor(project.adapter);
+    const installed = await execute(adapter.install(project), project, false);
+    const status = JSON.parse(installed.content[0].text) as { status: string; exitCode?: number };
+    if (status.status !== "ran" || status.exitCode !== 0) return installed;
+    let prepared = installed;
+    for (const operation of adapter.postInstall?.(project) ?? []) {
+      prepared = await execute(operation, project, false);
+      const result = JSON.parse(prepared.content[0].text) as { status: string; exitCode?: number };
+      if (result.status !== "ran" || result.exitCode !== 0) break;
+    }
+    return prepared;
   },
 );
 

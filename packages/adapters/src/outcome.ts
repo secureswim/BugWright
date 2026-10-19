@@ -47,6 +47,9 @@ const TRANSFORM_ERROR_PATTERNS: RegExp[] = [
   /Cannot find module/i,
   /ERR_MODULE_NOT_FOUND/,
   /Parsing error:/i,
+  /ERROR collecting /, // pytest: import or syntax error while loading a test module
+  /ImportError while importing test module/i,
+  /errors? during collection/i,
   /Unexpected token .* in /i,
 ];
 

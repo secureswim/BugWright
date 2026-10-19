@@ -289,12 +289,14 @@ results — not the size of the opening payload.
 checkpoint and publication recoveries, repeated acquisitions, and recovery
 duration.
 
-Tasks carry an `executionMode` so the same schema can compare `MULTI_AGENT`
-against a `SINGLE_AGENT` baseline. **That baseline is not implemented yet, so
-no performance claim is made here.** Presenting the multi-agent path as if it
-had been measured against one would be the easiest way to make this project
-dishonest. The protocol for running that comparison is in
-[evaluations/README.md](evaluations/README.md).
+Tasks carry an `executionMode` so the same schema compares `MULTI_AGENT` against a
+`SINGLE_AGENT` baseline. Both are implemented and have been compared on a small
+fixture corpus; see [evaluations/RESULTS.md](evaluations/RESULTS.md). With `gpt-4.1`
+the single agent resolved 11/12 runs and multi-agent 12/12, at about 2.4x the cost per
+correct fix. The corpus is four tiny fixtures at n=3, so this shows the pipeline works
+and what it costs, **not** that multi-agent is better, and it is not a SWE-bench result.
+The ablations (knowledge graph, reviewer, quarantine) were inconclusive on these
+fixtures. The protocol is in [evaluations/README.md](evaluations/README.md).
 
 ## Documentation
 

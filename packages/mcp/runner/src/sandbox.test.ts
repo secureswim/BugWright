@@ -69,6 +69,14 @@ describe("buildRunArgs", () => {
     expect(pairs(install, "--network")).toContain("bridge");
   });
 
+  it("passes fixed adapter environment to the container", () => {
+    const args = buildRunArgs({
+      ...base,
+      command: { ...base.command, env: { PRISMA_SCHEMA_ENGINE_BINARY: "/workspace/engine" } },
+    });
+    expect(pairs(args, "-e")).toEqual(["PRISMA_SCHEMA_ENGINE_BINARY=/workspace/engine"]);
+  });
+
   it("mounts the dependency cache volume", () => {
     expect(pairs(buildRunArgs(base), "-v")).toContain(
       "bugwright-node-modules-abc:/workspace/frontend/node_modules",

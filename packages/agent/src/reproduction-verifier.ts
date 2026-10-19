@@ -25,7 +25,13 @@ export function createReproductionVerifier(
   return async (testPath: string) => {
     const baseline = await captureArtifact(repoRoot, base);
     options.onBaseline(baseline);
-    const testHash = sha256(await readFile(resolveInside(repoRoot, testPath)));
+    let testHash: string;
+    try {
+      testHash = sha256(await readFile(resolveInside(repoRoot, testPath)));
+    } catch {
+      // The model named a file it never successfully wrote; report it so the model can correct itself.
+      return { failed: false, output: `The reproduction test file ${testPath} does not exist.`, ran: false };
+    }
     if (!baseline.files.some((file) => file.path === testPath && file.sha256 === testHash)) {
       throw new Error("The reproduction test must be a captured, non-ignored change");
     }

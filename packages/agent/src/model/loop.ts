@@ -257,5 +257,27 @@ export function parseStructured<T>(text: string): T {
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start < 0 || end < start) throw new Error("Agent did not return structured JSON");
-  return JSON.parse(cleaned.slice(start, end + 1)) as T;
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1)) as T;
+  } catch (error) {
+    // Models sometimes emit prose or a second object after the first. Take the first balanced object.
+    const first = firstBalancedObject(cleaned, start);
+    if (first === undefined) throw error;
+    return JSON.parse(first) as T;
+  }
+}
+
+function firstBalancedObject(text: string, start: number): string | undefined {
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (char === "\\") index++;
+      else if (char === '"') inString = false;
+    } else if (char === '"') inString = true;
+    else if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) return text.slice(start, index + 1);
+  }
+  return undefined;
 }

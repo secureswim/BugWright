@@ -37,6 +37,7 @@ import { executeSingleAgent } from "./single-agent.js";
 import { cloneArguments, pinnedCommit } from "./preparation.js";
 import {
   coder,
+  MAX_REPRODUCTION_TRIES,
   managerDecide,
   managerPlan,
   managerSynthesize,
@@ -103,7 +104,13 @@ async function prepare(
   await rm(repoRoot, { recursive: true, force: true });
 
   if (task.demoMode) {
-    const fixture = path.join(projectRoot(), "fixtures", "calculator-bug");
+    // Evaluation fixtures are selected by repository name; anything else keeps the original demo fixture.
+    const named = /^[a-z0-9-]+$/.test(task.repositoryName) ? task.repositoryName : "";
+    const fixture = path.join(
+      projectRoot(),
+      "fixtures",
+      named && (await exists(path.join(projectRoot(), "fixtures", named))) ? named : "calculator-bug",
+    );
     await cp(fixture, repoRoot, { recursive: true });
     await command("git", ["init", "-b", "main"], repoRoot);
     await command("git", ["add", "."], repoRoot);
@@ -362,7 +369,9 @@ async function executeTask(taskId: string) {
     let reproduction = task.reproductionReport as unknown as ReproductionReport | null;
     let reproductionProof = task.reproductionProof as unknown as ReproductionProof | null;
     let reproductionBaseline: ReviewArtifact | null = null;
-    if (!reproduction) {
+    // A saved unsuccessful report is not a completed reproduction checkpoint.
+    // Retrying after runner setup is fixed must write and verify a new test.
+    if (!reproduction?.reproduced) {
       await state(taskId, "REPRODUCING", "Manager delegated reproduction before any code is written");
 
       // Verification runs through the Tester's runner authority, invoked by the
@@ -400,16 +409,33 @@ async function executeTask(taskId: string) {
       const conventions = detected.project
         ? { ...detected.project.testConventions, projectPath: detected.project.projectPath }
         : undefined;
-      const produced = await reproducer(
-        taskId,
-        issue,
-        reports,
-        mcp,
-        0,
-        researchArtifacts,
-        verify,
-        conventions,
-      );
+      const feedback: { testPath: string; problem: string }[] = [];
+      let produced = await reproducer(taskId, issue, reports, mcp, 0, researchArtifacts, verify, conventions);
+      // Retry only when a test was written but rejected; a model that declines (nothing assertable) stops here.
+      while (
+        !produced.report.reproduced &&
+        produced.report.testPath &&
+        feedback.length < MAX_REPRODUCTION_TRIES - 1
+      ) {
+        feedback.push({
+          testPath: produced.report.testPath,
+          problem: `${produced.report.blockedReason ?? ""}
+${produced.report.failureOutput ?? ""}`.slice(-3000),
+        });
+        researchArtifacts.push(produced.artifactId);
+        reproductionProof = null;
+        produced = await reproducer(
+          taskId,
+          issue,
+          reports,
+          mcp,
+          0,
+          researchArtifacts,
+          verify,
+          conventions,
+          feedback,
+        );
+      }
       reproduction = produced.report;
       researchArtifacts.push(produced.artifactId);
       await updateTaskWithLease(taskId, {

@@ -62,6 +62,20 @@ describe("repository MCP integrity controls", () => {
     });
     expect(await readFile(path.join(root, "source.js"), "utf8")).toBe("const answer = 42;");
   });
+  it("accepts a patch copied from XML-escaped quarantine output and writes the real characters", async () => {
+    await writeFile(path.join(root, "quoted.js"), 'const s = "a" + "b";');
+    await call("apply_patch", {
+      path: "quoted.js",
+      oldText: "const s = &quot;a&quot; + &quot;b&quot;;",
+      newText: "const s = &quot;ab&quot;;",
+    });
+    expect(await readFile(path.join(root, "quoted.js"), "utf8")).toBe('const s = "ab";');
+  });
+  it("does not decode entities when the literal text exists in the file", async () => {
+    await writeFile(path.join(root, "html.js"), "const h = '&amp;';");
+    await call("apply_patch", { path: "html.js", oldText: "'&amp;'", newText: "'&amp;&amp;'" });
+    expect(await readFile(path.join(root, "html.js"), "utf8")).toBe("const h = '&amp;&amp;';");
+  });
   it.each(["read_file", "read_range", "apply_patch", "write_test_file"])(
     "blocks symlink escape through %s",
     async (tool) => {

@@ -20,7 +20,9 @@ export type Network = "none" | "bridge";
 export interface CommandSpec {
   /** Executable and arguments, executed without a shell. */
   argv: string[];
-  /** Container network. Only dependency installation is granted egress. */
+  /** Fixed adapter-provided environment for this command only. */
+  env?: Record<string, string>;
+  /** Container network. Only dependency setup operations are granted egress. */
   network: Network;
   timeoutMs: number;
   /** Project directory relative to the repository root; "." for the root. */
@@ -74,6 +76,8 @@ export interface DetectedProject {
    * of a new test are read from the repository rather than guessed.
    */
   testConventions?: import("./conventions.js").TestConventions;
+  /** Locked-install code generation that must run with network disabled. */
+  prismaSchema?: boolean;
 }
 
 /** A named cache volume mounted into the container for a project. */
@@ -109,6 +113,8 @@ export interface LanguageAdapter {
   detect(root: string): Promise<DetectedProject[]>;
 
   install(project: DetectedProject): Operation;
+  /** Optional fixed dependency setup steps after a successful install. */
+  postInstall?(project: DetectedProject): Operation[] | undefined;
   test(project: DetectedProject, options?: TestOptions): Operation;
   typecheck(project: DetectedProject): Operation;
   lint(project: DetectedProject, options?: LintOptions): Operation;

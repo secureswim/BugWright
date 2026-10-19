@@ -180,6 +180,14 @@ if (allowed("read_range")) {
   );
 }
 
+const decodeEntities = (value: string) =>
+  value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+
 if (allowed("apply_patch")) {
   server.tool(
     "apply_patch",
@@ -189,7 +197,8 @@ if (allowed("apply_patch")) {
       oldText: z.string().min(1).max(120_000),
       newText: z.string().max(120_000),
     },
-    async ({ path: requested, oldText, newText }) => {
+    async ({ path: requested, oldText, newText: proposedText }) => {
+      let newText = proposedText;
       const safe = assertEditable(requested);
       assertReproductionEditable(safe, process.env.BUGWRIGHT_PROTECTED_TEST);
       const absolute = resolveInside(root, safe);
@@ -197,7 +206,17 @@ if (allowed("apply_patch")) {
 
       // Tolerate line-ending drift between what the model saw and what is on disk.
       const variants = [oldText, oldText.replace(/\r?\n/g, "\r\n"), oldText.replace(/\r\n/g, "\n")];
-      const matched = variants.find((candidate) => content.includes(candidate));
+      let matched = variants.find((candidate) => content.includes(candidate));
+      // File text reaches the model XML-escaped inside the quarantine boundary, and models copy that
+      // escaping (&quot;) into their patch. If the literal text is absent but its unescaped form is
+      // present, the model meant the unescaped form, in both the old and the new text.
+      if (!matched && /&(?:amp|lt|gt|quot|apos);/.test(oldText)) {
+        const decoded = decodeEntities(oldText);
+        if (content.includes(decoded)) {
+          matched = decoded;
+          newText = decodeEntities(newText);
+        }
+      }
       if (!matched) throw new Error("Patch context was not found");
       const first = content.indexOf(matched);
       if (content.indexOf(matched, first + 1) >= 0) throw new Error("Patch context is ambiguous");

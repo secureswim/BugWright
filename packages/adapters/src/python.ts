@@ -117,7 +117,7 @@ export class PythonAdapter implements LanguageAdapter {
     if (!project.available.test) {
       return notConfigured("No pytest-compatible test configuration was detected");
     }
-    const argv = [...runner(project.packageManager as PythonManager), "pytest", "-q"];
+    const argv = [...runner(project.packageManager as PythonManager), "python", "-m", "pytest", "-q"];
     if (options.only) argv.push(options.only);
     return configured({
       argv,

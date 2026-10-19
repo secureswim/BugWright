@@ -18,6 +18,41 @@ async function scaffold(files: Record<string, string>): Promise<string> {
 const pkg = (scripts: Record<string, string>) => JSON.stringify({ name: "x", scripts });
 
 describe("NodeAdapter detection", () => {
+  it("detects a local Prisma client that needs offline generation", async () => {
+    const root = await scaffold({
+      "backend/package.json": JSON.stringify({
+        dependencies: { "@prisma/client": "6.5.0" },
+        devDependencies: { prisma: "6.5.0" },
+      }),
+      "backend/prisma/schema.prisma": 'generator client { provider = "prisma-client-js" }',
+    });
+    const [project] = await new NodeAdapter().detect(root);
+    expect(project.prismaSchema).toBe(true);
+    const operations = new NodeAdapter().postInstall(project);
+    expect(operations).toHaveLength(2);
+    expect(operations?.[0].configured && operations[0].command).toMatchObject({
+      argv: ["node", "node_modules/@prisma/engines/scripts/postinstall.js"],
+      network: "bridge",
+      projectPath: "backend",
+    });
+    expect(operations?.[1].configured && operations[1].command).toMatchObject({
+      argv: ["node", "node_modules/prisma/build/index.js", "generate", "--schema", "prisma/schema.prisma"],
+      env: {
+        PRISMA_QUERY_ENGINE_LIBRARY:
+          "/workspace/backend/node_modules/@prisma/engines/libquery_engine-debian-openssl-3.0.x.so.node",
+        PRISMA_SCHEMA_ENGINE_BINARY:
+          "/workspace/backend/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x",
+      },
+      network: "none",
+      projectPath: "backend",
+    });
+  });
+
+  it("does not generate Prisma code for other Node projects", async () => {
+    const root = await scaffold({ "package.json": pkg({ test: "vitest" }) });
+    const [project] = await new NodeAdapter().detect(root);
+    expect(new NodeAdapter().postInstall(project)).toBeUndefined();
+  });
   it("finds a project at the repository root", async () => {
     const root = await scaffold({ "package.json": pkg({ test: "vitest" }) });
     const [project] = await new NodeAdapter().detect(root);
@@ -138,7 +173,7 @@ describe("PythonAdapter", () => {
     expect(project.available.test).toBe(true);
     expect(project.available.lint).toBe(true);
     const test = new PythonAdapter().test(project);
-    expect(test.configured && test.command.argv).toEqual(["poetry", "run", "pytest", "-q"]);
+    expect(test.configured && test.command.argv).toEqual(["poetry", "run", "python", "-m", "pytest", "-q"]);
   });
 
   it("detects a bare requirements.txt project", async () => {
